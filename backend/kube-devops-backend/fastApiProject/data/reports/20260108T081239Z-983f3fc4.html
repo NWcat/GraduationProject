@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>K3s 巡检报告 · 20260108T081239Z-983f3fc4</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(255,255,255,0.06);
+      --panel2: rgba(255,255,255,0.08);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.65);
+      --line: rgba(255,255,255,0.12);
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --error: #ef4444;
+      --skip: #94a3b8;
+      --blue: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 700px at 10% 0%, rgba(96,165,250,0.25), transparent 55%),
+                  radial-gradient(900px 600px at 80% 10%, rgba(34,197,94,0.18), transparent 55%),
+                  radial-gradient(900px 600px at 70% 80%, rgba(245,158,11,0.12), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC","Hiragino Sans GB","Microsoft YaHei", Arial, sans-serif;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 18px 36px; }
+    .top {
+      display:flex; align-items:flex-start; justify-content: space-between; gap: 16px;
+      margin-bottom: 14px;
+    }
+    .h1 {
+      font-size: 22px; font-weight: 800; letter-spacing: 0.2px;
+      margin: 0 0 6px;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 12px; line-height: 1.5;
+    }
+    .actions {
+      display:flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;
+    }
+    .btn {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .btn:hover { background: rgba(255,255,255,0.10); }
+    .btn.primary { border-color: rgba(96,165,250,0.55); }
+    .btn.tiny { padding: 6px 8px; border-radius: 8px; }
+    .grid {
+      display:grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
+      margin: 10px 0 14px;
+    }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      .top { flex-direction: column; }
+      .actions { justify-content: flex-start; }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 14px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+      backdrop-filter: blur(8px);
+    }
+    .score {
+      display:flex; gap: 12px; align-items: center;
+    }
+    .ring {
+      width: 74px; height: 74px; border-radius: 999px;
+      display:flex; align-items:center; justify-content:center;
+      background: conic-gradient(
+        var(--warn) 302.40000000000003deg,
+        rgba(255,255,255,0.12) 0
+      );
+      position: relative;
+    }
+    .ring::after {
+      content: "";
+      position: absolute; inset: 7px;
+      border-radius: 999px;
+      background: rgba(11,18,32,0.9);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .ring b {
+      position: relative;
+      font-size: 18px;
+    }
+    .score .txt .label {
+      font-size: 12px; color: var(--muted);
+      margin-bottom: 2px;
+    }
+    .score .txt .big {
+      font-size: 16px; font-weight: 800;
+    }
+    .pillbar {
+      margin-top: 10px;
+      display:flex; gap: 10px; flex-wrap: wrap;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05);
+      padding: 10px 12px;
+      border-radius: 14px;
+      min-width: 120px;
+    }
+    .pill .k { color: var(--muted); font-size: 12px; }
+    .pill .v { font-size: 18px; font-weight: 800; margin-top: 2px; }
+    .pill .v.ok { color: var(--ok); }
+    .pill .v.warn { color: var(--warn); }
+    .pill .v.error { color: var(--error); }
+    .pill .v.skip { color: var(--skip); }
+
+    .filters {
+      display:flex; gap: 10px; flex-wrap: wrap; align-items:center;
+      margin-top: 8px;
+    }
+    .input {
+      flex: 1;
+      min-width: 220px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 9px 10px;
+      border-radius: 12px;
+      outline: none;
+    }
+    .select {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 9px 10px;
+      border-radius: 12px;
+      outline: none;
+    }
+
+    .section {
+      margin-top: 14px;
+    }
+    .section h2 {
+      margin: 12px 0 10px;
+      font-size: 14px;
+      color: rgba(255,255,255,0.85);
+      letter-spacing: .2px;
+    }
+    .group {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .group-head {
+      display:flex; align-items:center; justify-content: space-between;
+      padding: 12px 14px;
+      cursor: pointer;
+      user-select: none;
+      background: rgba(255,255,255,0.03);
+    }
+    .group-head:hover { background: rgba(255,255,255,0.06); }
+    .group-title {
+      display:flex; gap: 10px; align-items: center;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .group-badges {
+      display:flex; gap: 8px; align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .caret {
+      width: 10px; height: 10px;
+      border-right: 2px solid rgba(255,255,255,0.55);
+      border-bottom: 2px solid rgba(255,255,255,0.55);
+      transform: rotate(45deg);
+      margin-left: 8px;
+    }
+    .group-body { padding: 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: rgba(11,18,32,0.95);
+      backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--line);
+      z-index: 2;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      vertical-align: top;
+      font-size: 13px;
+    }
+    .col-item .title {
+      font-weight: 800;
+      margin-bottom: 3px;
+    }
+    .col-item .sub {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .badge {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-weight: 900;
+      font-size: 11px;
+      letter-spacing: .4px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+    }
+    .badge.ok { color: var(--ok); border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.10); }
+    .badge.warn { color: var(--warn); border-color: rgba(245,158,11,0.38); background: rgba(245,158,11,0.12); }
+    .badge.error { color: var(--error); border-color: rgba(239,68,68,0.38); background: rgba(239,68,68,0.10); }
+    .badge.skip { color: var(--skip); border-color: rgba(148,163,184,0.30); background: rgba(148,163,184,0.10); }
+
+    .suggest {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px dashed rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.85);
+    }
+    .tag {
+      display:inline-block;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      color: rgba(255,255,255,0.85);
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.05);
+      margin-right: 6px;
+    }
+    details > summary {
+      cursor: pointer;
+      color: var(--blue);
+      user-select: none;
+    }
+    .pre {
+      margin: 10px 0 6px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.25);
+      overflow: auto;
+      max-height: 320px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: rgba(255,255,255,0.88);
+    }
+    .ev-actions { display:flex; gap: 8px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .footer {
+      margin-top: 14px;
+      color: rgba(255,255,255,0.60);
+      font-size: 12px;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="h1">K3s 一键巡检报告</div>
+        <div class="meta">
+          runId: <code>20260108T081239Z-983f3fc4</code> · updatedAt: <code>2026-01-08T08:12:39.821631+00:00</code> · duration: <code>587 ms</code>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" type="button" onclick="copyAll()">复制整份报告 JSON</button>
+        <button class="btn" type="button" onclick="expandAll(true)">展开全部 evidence</button>
+        <button class="btn" type="button" onclick="expandAll(false)">收起全部 evidence</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="score">
+          <div class="ring"><b>84</b></div>
+          <div class="txt">
+            <div class="label">健康评分</div>
+            <div class="big">良好 <span class="muted">（ok）</span></div>
+            <div class="muted" style="margin-top:6px;">
+              评分规则：Error -20 / Warn -8（最低 0）
+            </div>
+          </div>
+        </div>
+        <div class="pillbar">
+          <div class="pill"><div class="k">总项</div><div class="v">7</div></div>
+          <div class="pill"><div class="k">OK</div><div class="v ok">5</div></div>
+          <div class="pill"><div class="k">WARN</div><div class="v warn">2</div></div>
+          <div class="pill"><div class="k">ERROR</div><div class="v error">0</div></div>
+          <div class="pill"><div class="k">SKIP</div><div class="v skip">0</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:800;margin-bottom:8px;">筛选与搜索</div>
+        <div class="filters">
+          <input id="q" class="input" placeholder="搜索：key/title/detail/suggestion..." oninput="applyFilter()" />
+          <select id="lv" class="select" onchange="applyFilter()">
+            <option value="all">级别：全部</option>
+            <option value="error">只看 ERROR</option>
+            <option value="warn">只看 WARN+</option>
+            <option value="ok">只看 OK</option>
+            <option value="skip">只看 SKIP</option>
+          </select>
+          <select id="gp" class="select" onchange="applyFilter()">
+            <option value="all">分组：全部</option>
+            <option value="nodes">nodes</option><option value="system">system</option><option value="pods">pods</option><option value="events">events</option><option value="storage">storage</option><option value="dns">dns</option><option value="prom">prom</option>
+          </select>
+          <button class="btn" type="button" onclick="resetFilter()">重置</button>
+        </div>
+        <div class="footer">
+          提示：若出现 “权限不足/需要 RBAC: …”，给巡检凭据增加对应 list/get 权限。
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>巡检项明细（按分组）</h2>
+
+      
+        <div class="group" data-groupwrap="nodes">
+          <div class="group-head" onclick="toggleGroup('nodes')">
+            <div class="group-title">
+              <span>nodes</span>
+              <span class="caret" id="caret_nodes"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_nodes"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_nodes">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="ok" data-group="nodes" data-text="节点状态（Ready/可调度） nodes_ready ok 节点总数：4 None">
+  <td class="col-item">
+    <div class="title">节点状态（Ready/可调度）</div>
+    <div class="sub">nodes_ready</div>
+  </td>
+  <td class="col-level"><span class="badge ok">OK</span></td>
+  <td class="col-detail">
+    <div>节点总数：4</div>
+    
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;total&quot;: 4,
+  &quot;notReady&quot;: [],
+  &quot;schedulingDisabled&quot;: []
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">47 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="system">
+          <div class="group-head" onclick="toggleGroup('system')">
+            <div class="group-title">
+              <span>system</span>
+              <span class="caret" id="caret_system"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_system"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_system">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="ok" data-group="system" data-text="kube-system 核心组件 Pod 状态 kube_system_core_pods ok 核心组件正常 None">
+  <td class="col-item">
+    <div class="title">kube-system 核心组件 Pod 状态</div>
+    <div class="sub">kube_system_core_pods</div>
+  </td>
+  <td class="col-level"><span class="badge ok">OK</span></td>
+  <td class="col-detail">
+    <div>核心组件正常</div>
+    
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;matched&quot;: 3,
+  &quot;bad&quot;: []
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">143 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="pods">
+          <div class="group-head" onclick="toggleGroup('pods')">
+            <div class="group-title">
+              <span>pods</span>
+              <span class="caret" id="caret_pods"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_pods"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_pods">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="warn" data-group="pods" data-text="业务 Pod 异常（CrashLoop/ImagePull/频繁重启） pods_abnormal warn 高重启：31 结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。">
+  <td class="col-item">
+    <div class="title">业务 Pod 异常（CrashLoop/ImagePull/频繁重启）</div>
+    <div class="sub">pods_abnormal</div>
+  </td>
+  <td class="col-level"><span class="badge warn">WARN</span></td>
+  <td class="col-detail">
+    <div>高重启：31</div>
+    <div class='suggest'><span class='tag'>建议</span> 结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。</div>
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;totalPods&quot;: 27,
+  &quot;crashSamples&quot;: [],
+  &quot;imagePullSamples&quot;: [],
+  &quot;highRestartSamples&quot;: [
+    &quot;kube-system/coredns-5688667fd4-75tzb(restarts=7)&quot;,
+    &quot;kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=8)&quot;,
+    &quot;kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+    &quot;kube-system/traefik-c98fdf6fb-cm6tg(restarts=7)&quot;,
+    &quot;logging/loki-0(restarts=7)&quot;,
+    &quot;logging/loki-0(restarts=7)&quot;,
+    &quot;logging/loki-canary-jm4sm(restarts=7)&quot;,
+    &quot;logging/loki-canary-l7jgz(restarts=7)&quot;,
+    &quot;logging/loki-canary-ng424(restarts=7)&quot;,
+    &quot;logging/loki-gateway-569b955fd6-lzls5(restarts=18)&quot;,
+    &quot;logging/promtail-2hr9w(restarts=7)&quot;,
+    &quot;logging/promtail-rvbhb(restarts=7)&quot;,
+    &quot;logging/promtail-vl94d(restarts=7)&quot;,
+    &quot;monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=7)&quot;
+  ]
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">573 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="events">
+          <div class="group-head" onclick="toggleGroup('events')">
+            <div class="group-title">
+              <span>events</span>
+              <span class="caret" id="caret_events"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_events"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_events">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="warn" data-group="events" data-text="集群事件（Warning/Error） events warn Warning/Error 事件数：6 重点看 FailedScheduling / ImagePull / Unhealthy 等原因。">
+  <td class="col-item">
+    <div class="title">集群事件（Warning/Error）</div>
+    <div class="sub">events</div>
+  </td>
+  <td class="col-level"><span class="badge warn">WARN</span></td>
+  <td class="col-detail">
+    <div>Warning/Error 事件数：6</div>
+    <div class='suggest'><span class='tag'>建议</span> 重点看 FailedScheduling / ImagePull / Unhealthy 等原因。</div>
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;samples&quot;: [
+    &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+    &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-5r4ft FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-gw5cv FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;logging/loki-canary-cszl4 FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;logging/promtail-8hlfs FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;
+  ],
+  &quot;totalEvents&quot;: 86,
+  &quot;badEvents&quot;: 6
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">256 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="storage">
+          <div class="group-head" onclick="toggleGroup('storage')">
+            <div class="group-title">
+              <span>storage</span>
+              <span class="caret" id="caret_storage"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_storage"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_storage">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="ok" data-group="storage" data-text="存储（StorageClass / PV / PVC） storage ok SC:1 PV:3 PVC:3 None">
+  <td class="col-item">
+    <div class="title">存储（StorageClass / PV / PVC）</div>
+    <div class="sub">storage</div>
+  </td>
+  <td class="col-level"><span class="badge ok">OK</span></td>
+  <td class="col-detail">
+    <div>SC:1 PV:3 PVC:3</div>
+    
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;storageClasses&quot;: [
+    &quot;local-path&quot;
+  ],
+  &quot;pvBad&quot;: [],
+  &quot;pvcBad&quot;: [],
+  &quot;pvCount&quot;: 3,
+  &quot;pvcCount&quot;: 3
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">580 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="dns">
+          <div class="group-head" onclick="toggleGroup('dns')">
+            <div class="group-title">
+              <span>dns</span>
+              <span class="caret" id="caret_dns"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_dns"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_dns">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="ok" data-group="dns" data-text="kube-dns Endpoints（是否为空） kube_dns ok kube-dns Endpoints 正常 None">
+  <td class="col-item">
+    <div class="title">kube-dns Endpoints（是否为空）</div>
+    <div class="sub">kube_dns</div>
+  </td>
+  <td class="col-level"><span class="badge ok">OK</span></td>
+  <td class="col-detail">
+    <div>kube-dns Endpoints 正常</div>
+    
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;addresses&quot;: 1
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">448 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="group" data-groupwrap="prom">
+          <div class="group-head" onclick="toggleGroup('prom')">
+            <div class="group-title">
+              <span>prom</span>
+              <span class="caret" id="caret_prom"></span>
+            </div>
+            <div class="group-badges">
+              <span class="muted" id="cnt_prom"></span>
+            </div>
+          </div>
+          <div class="group-body" id="body_prom">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28%;">巡检项</th>
+                  <th style="width:10%;">级别</th>
+                  <th>详情</th>
+                  <th style="width:18%;">证据</th>
+                  <th style="width:10%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+<tr class="row" data-level="ok" data-group="prom" data-text="Prometheus 采集状态 prometheus ok Prometheus 可用（up &gt; 0） None">
+  <td class="col-item">
+    <div class="title">Prometheus 采集状态</div>
+    <div class="sub">prometheus</div>
+  </td>
+  <td class="col-level"><span class="badge ok">OK</span></td>
+  <td class="col-detail">
+    <div>Prometheus 可用（up &gt; 0）</div>
+    
+  </td>
+  <td class="col-ev">
+    <details>
+      <summary>查看</summary>
+      <pre class="pre">{
+  &quot;sum_up&quot;: 24.0
+}</pre>
+      <div class="ev-actions">
+        <button class="btn tiny" type="button" onclick="copyText(this)">复制 JSON</button>
+      </div>
+    </details>
+  </td>
+  <td class="col-dur">55 ms</td>
+</tr>
+
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+    </div>
+
+    <div class="footer">
+      生成时间：<code>2026-01-08T08:12:39.821631+00:00</code> · runId：<code>20260108T081239Z-983f3fc4</code>
+    </div>
+
+    <textarea id="alljson" class="hidden">{
+  &quot;runId&quot;: &quot;20260108T081239Z-983f3fc4&quot;,
+  &quot;updatedAt&quot;: &quot;2026-01-08T08:12:39.821631+00:00&quot;,
+  &quot;durationMs&quot;: 587,
+  &quot;summary&quot;: {
+    &quot;total&quot;: 7,
+    &quot;ok&quot;: 5,
+    &quot;warn&quot;: 2,
+    &quot;error&quot;: 0,
+    &quot;skip&quot;: 0
+  },
+  &quot;items&quot;: [
+    {
+      &quot;key&quot;: &quot;events&quot;,
+      &quot;title&quot;: &quot;集群事件（Warning/Error）&quot;,
+      &quot;level&quot;: &quot;warn&quot;,
+      &quot;detail&quot;: &quot;Warning/Error 事件数：6&quot;,
+      &quot;suggestion&quot;: &quot;重点看 FailedScheduling / ImagePull / Unhealthy 等原因。&quot;,
+      &quot;evidence&quot;: {
+        &quot;samples&quot;: [
+          &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+          &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-5r4ft FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-gw5cv FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+          &quot;logging/loki-canary-cszl4 FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+          &quot;logging/promtail-8hlfs FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;
+        ],
+        &quot;totalEvents&quot;: 86,
+        &quot;badEvents&quot;: 6
+      },
+      &quot;durationMs&quot;: 256
+    },
+    {
+      &quot;key&quot;: &quot;pods_abnormal&quot;,
+      &quot;title&quot;: &quot;业务 Pod 异常（CrashLoop/ImagePull/频繁重启）&quot;,
+      &quot;level&quot;: &quot;warn&quot;,
+      &quot;detail&quot;: &quot;高重启：31&quot;,
+      &quot;suggestion&quot;: &quot;结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。&quot;,
+      &quot;evidence&quot;: {
+        &quot;totalPods&quot;: 27,
+        &quot;crashSamples&quot;: [],
+        &quot;imagePullSamples&quot;: [],
+        &quot;highRestartSamples&quot;: [
+          &quot;kube-system/coredns-5688667fd4-75tzb(restarts=7)&quot;,
+          &quot;kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=8)&quot;,
+          &quot;kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+          &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+          &quot;kube-system/traefik-c98fdf6fb-cm6tg(restarts=7)&quot;,
+          &quot;logging/loki-0(restarts=7)&quot;,
+          &quot;logging/loki-0(restarts=7)&quot;,
+          &quot;logging/loki-canary-jm4sm(restarts=7)&quot;,
+          &quot;logging/loki-canary-l7jgz(restarts=7)&quot;,
+          &quot;logging/loki-canary-ng424(restarts=7)&quot;,
+          &quot;logging/loki-gateway-569b955fd6-lzls5(restarts=18)&quot;,
+          &quot;logging/promtail-2hr9w(restarts=7)&quot;,
+          &quot;logging/promtail-rvbhb(restarts=7)&quot;,
+          &quot;logging/promtail-vl94d(restarts=7)&quot;,
+          &quot;monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=7)&quot;
+        ]
+      },
+      &quot;durationMs&quot;: 573
+    },
+    {
+      &quot;key&quot;: &quot;kube_dns&quot;,
+      &quot;title&quot;: &quot;kube-dns Endpoints（是否为空）&quot;,
+      &quot;level&quot;: &quot;ok&quot;,
+      &quot;detail&quot;: &quot;kube-dns Endpoints 正常&quot;,
+      &quot;suggestion&quot;: null,
+      &quot;evidence&quot;: {
+        &quot;addresses&quot;: 1
+      },
+      &quot;durationMs&quot;: 448
+    },
+    {
+      &quot;key&quot;: &quot;kube_system_core_pods&quot;,
+      &quot;title&quot;: &quot;kube-system 核心组件 Pod 状态&quot;,
+      &quot;level&quot;: &quot;ok&quot;,
+      &quot;detail&quot;: &quot;核心组件正常&quot;,
+      &quot;suggestion&quot;: null,
+      &quot;evidence&quot;: {
+        &quot;matched&quot;: 3,
+        &quot;bad&quot;: []
+      },
+      &quot;durationMs&quot;: 143
+    },
+    {
+      &quot;key&quot;: &quot;nodes_ready&quot;,
+      &quot;title&quot;: &quot;节点状态（Ready/可调度）&quot;,
+      &quot;level&quot;: &quot;ok&quot;,
+      &quot;detail&quot;: &quot;节点总数：4&quot;,
+      &quot;suggestion&quot;: null,
+      &quot;evidence&quot;: {
+        &quot;total&quot;: 4,
+        &quot;notReady&quot;: [],
+        &quot;schedulingDisabled&quot;: []
+      },
+      &quot;durationMs&quot;: 47
+    },
+    {
+      &quot;key&quot;: &quot;prometheus&quot;,
+      &quot;title&quot;: &quot;Prometheus 采集状态&quot;,
+      &quot;level&quot;: &quot;ok&quot;,
+      &quot;detail&quot;: &quot;Prometheus 可用（up &gt; 0）&quot;,
+      &quot;suggestion&quot;: null,
+      &quot;evidence&quot;: {
+        &quot;sum_up&quot;: 24.0
+      },
+      &quot;durationMs&quot;: 55
+    },
+    {
+      &quot;key&quot;: &quot;storage&quot;,
+      &quot;title&quot;: &quot;存储（StorageClass / PV / PVC）&quot;,
+      &quot;level&quot;: &quot;ok&quot;,
+      &quot;detail&quot;: &quot;SC:1 PV:3 PVC:3&quot;,
+      &quot;suggestion&quot;: null,
+      &quot;evidence&quot;: {
+        &quot;storageClasses&quot;: [
+          &quot;local-path&quot;
+        ],
+        &quot;pvBad&quot;: [],
+        &quot;pvcBad&quot;: [],
+        &quot;pvCount&quot;: 3,
+        &quot;pvcCount&quot;: 3
+      },
+      &quot;durationMs&quot;: 580
+    }
+  ],
+  &quot;meta&quot;: {
+    &quot;enablePrometheus&quot;: true,
+    &quot;include&quot;: [],
+    &quot;perCheckTimeoutSeconds&quot;: 5,
+    &quot;totalTimeoutSeconds&quot;: 25
+  }
+}</textarea>
+  </div>
+
+<script>
+  function norm(s) { return (s||"").toString().toLowerCase().trim(); }
+
+  function applyFilter() {
+    const q = norm(document.getElementById("q").value);
+    const lv = document.getElementById("lv").value;
+    const gp = document.getElementById("gp").value;
+
+    const rows = document.querySelectorAll("tr.row");
+    let visible = 0;
+
+    rows.forEach(r => {
+      const level = r.getAttribute("data-level") || "";
+      const group = r.getAttribute("data-group") || "";
+      const text = norm(r.getAttribute("data-text") || "");
+
+      let ok = true;
+
+      if (q && text.indexOf(q) === -1) ok = false;
+
+      if (gp !== "all" && group !== gp) ok = false;
+
+      if (lv === "error") {
+        if (level !== "error") ok = false;
+      } else if (lv === "warn") {
+        if (!(level === "warn" || level === "error")) ok = false;
+      } else if (lv === "ok") {
+        if (level !== "ok") ok = false;
+      } else if (lv === "skip") {
+        if (level !== "skip") ok = false;
+      }
+
+      r.classList.toggle("hidden", !ok);
+      if (ok) visible++;
+    });
+
+    refreshGroupCounts();
+  }
+
+  function resetFilter() {
+    document.getElementById("q").value = "";
+    document.getElementById("lv").value = "all";
+    document.getElementById("gp").value = "all";
+    applyFilter();
+  }
+
+  function toggleGroup(g) {
+    const body = document.getElementById("body_" + g);
+    const caret = document.getElementById("caret_" + g);
+    const hidden = body.style.display === "none";
+    body.style.display = hidden ? "" : "none";
+    caret.style.transform = hidden ? "rotate(45deg)" : "rotate(-135deg)";
+  }
+
+  function expandAll(open) {
+    const ds = document.querySelectorAll("details");
+    ds.forEach(d => d.open = !!open);
+  }
+
+  function copyText(btn) {
+    // 找到同一 details 下的 pre
+    const pre = btn.closest("details").querySelector("pre");
+    navigator.clipboard.writeText(pre.innerText || "").then(() => {
+      btn.innerText = "已复制";
+      setTimeout(()=>btn.innerText="复制 JSON", 900);
+    });
+  }
+
+  function copyAll() {
+    const t = document.getElementById("alljson").value || "";
+    navigator.clipboard.writeText(t).then(() => {
+      alert("已复制整份报告 JSON");
+    });
+  }
+
+function refreshGroupCounts() {
+  const wraps = document.querySelectorAll("[data-groupwrap]");
+  wraps.forEach(w => {
+    const g = w.getAttribute("data-groupwrap");
+    const rows = w.querySelectorAll("tr.row");
+    let ok=0,warn=0,error=0,skip=0,vis=0;
+
+    rows.forEach(r => {
+      const hidden = r.classList.contains("hidden");
+      const lv = r.getAttribute("data-level");
+      if (!hidden) vis++;
+      if (lv === "ok") ok++;
+      else if (lv === "warn") warn++;
+      else if (lv === "error") error++;
+      else if (lv === "skip") skip++;
+    });
+
+    const el = document.getElementById("cnt_" + g);
+    if (el) {
+      el.innerText = "可见 " + vis + " · OK " + ok + " · WARN " + warn + " · ERROR " + error + " · SKIP " + skip;
+    }
+  });
+}
+
+
+  // 初始：折叠非严重项组可以按需改，这里默认展开全部
+  (function init() {
+    // caret 初始向下
+    document.querySelectorAll(".caret").forEach(c => c.style.transform = "rotate(45deg)");
+    refreshGroupCounts();
+  })();
+</script>
+</body>
+</html>

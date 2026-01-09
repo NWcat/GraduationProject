@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>K3s 巡检报告 - 20260108T080412Z-26857188</title>
+  <style>
+    body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; margin: 24px; }
+    .meta { color: #666; margin-bottom: 12px; }
+    .cards { display:flex; gap:12px; margin: 12px 0 18px; flex-wrap: wrap; }
+    .card { border:1px solid #e5e5e5; border-radius: 12px; padding: 12px 14px; min-width: 140px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-top:1px solid #eee; padding: 10px; vertical-align: top; font-size: 14px; }
+    th { text-align:left; background:#fafafa; border-top:1px solid #eee; }
+    .hint { color:#888; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1 style="margin:0 0 8px;">K3s 一键巡检报告</h1>
+  <div class="meta">
+    runId: <code>20260108T080412Z-26857188</code><br/>
+    updatedAt: <code>2026-01-08T08:04:12.619464+00:00</code><br/>
+    duration: <code>575 ms</code>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div>总项</div><div style="font-size:20px;"><b>7</b></div></div>
+    <div class="card"><div>OK</div><div style="font-size:20px;"><b>5</b></div></div>
+    <div class="card"><div>WARN</div><div style="font-size:20px;"><b>2</b></div></div>
+    <div class="card"><div>ERROR</div><div style="font-size:20px;"><b>0</b></div></div>
+    <div class="card"><div>SKIP</div><div style="font-size:20px;"><b>0</b></div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>巡检项</th>
+        <th>级别</th>
+        <th>详情</th>
+        <th>证据（evidence）</th>
+        <th>耗时</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+<tr>
+  <td style="white-space:nowrap;"><b>集群事件（Warning/Error）</b><br><small>events</small></td>
+  <td style="white-space:nowrap;">WARN</td>
+  <td>Warning/Error 事件数：6</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;samples&quot;: [
+    &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+    &quot;default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-5r4ft FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-gw5cv FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;logging/loki-canary-cszl4 FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;,
+    &quot;logging/promtail-8hlfs FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n&quot;
+  ],
+  &quot;totalEvents&quot;: 97,
+  &quot;badEvents&quot;: 6
+}</pre></td>
+  <td style="white-space:nowrap;">571 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>业务 Pod 异常（CrashLoop/ImagePull/频繁重启）</b><br><small>pods_abnormal</small></td>
+  <td style="white-space:nowrap;">WARN</td>
+  <td>高重启：31</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;totalPods&quot;: 27,
+  &quot;crashSamples&quot;: [],
+  &quot;imagePullSamples&quot;: [],
+  &quot;highRestartSamples&quot;: [
+    &quot;kube-system/coredns-5688667fd4-75tzb(restarts=7)&quot;,
+    &quot;kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=8)&quot;,
+    &quot;kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+    &quot;kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)&quot;,
+    &quot;kube-system/traefik-c98fdf6fb-cm6tg(restarts=7)&quot;,
+    &quot;logging/loki-0(restarts=7)&quot;,
+    &quot;logging/loki-0(restarts=7)&quot;,
+    &quot;logging/loki-canary-jm4sm(restarts=7)&quot;,
+    &quot;logging/loki-canary-l7jgz(restarts=7)&quot;,
+    &quot;logging/loki-canary-ng424(restarts=7)&quot;,
+    &quot;logging/loki-gateway-569b955fd6-lzls5(restarts=18)&quot;,
+    &quot;logging/promtail-2hr9w(restarts=7)&quot;,
+    &quot;logging/promtail-rvbhb(restarts=7)&quot;,
+    &quot;logging/promtail-vl94d(restarts=7)&quot;,
+    &quot;monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=7)&quot;
+  ]
+}</pre></td>
+  <td style="white-space:nowrap;">445 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>kube-dns Endpoints（是否为空）</b><br><small>kube_dns</small></td>
+  <td style="white-space:nowrap;">OK</td>
+  <td>kube-dns Endpoints 正常</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;addresses&quot;: 1
+}</pre></td>
+  <td style="white-space:nowrap;">321 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>kube-system 核心组件 Pod 状态</b><br><small>kube_system_core_pods</small></td>
+  <td style="white-space:nowrap;">OK</td>
+  <td>核心组件正常</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;matched&quot;: 3,
+  &quot;bad&quot;: []
+}</pre></td>
+  <td style="white-space:nowrap;">123 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>节点状态（Ready/可调度）</b><br><small>nodes_ready</small></td>
+  <td style="white-space:nowrap;">OK</td>
+  <td>节点总数：4</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;total&quot;: 4,
+  &quot;notReady&quot;: [],
+  &quot;schedulingDisabled&quot;: []
+}</pre></td>
+  <td style="white-space:nowrap;">44 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>Prometheus 采集状态</b><br><small>prometheus</small></td>
+  <td style="white-space:nowrap;">OK</td>
+  <td>Prometheus 可用（up &gt; 0）</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;sum_up&quot;: 24.0
+}</pre></td>
+  <td style="white-space:nowrap;">10 ms</td>
+</tr>
+
+<tr>
+  <td style="white-space:nowrap;"><b>存储（StorageClass / PV / PVC）</b><br><small>storage</small></td>
+  <td style="white-space:nowrap;">OK</td>
+  <td>SC:1 PV:3 PVC:3</td>
+  <td><pre style="margin:0;max-width:720px;overflow:auto;">{
+  &quot;storageClasses&quot;: [
+    &quot;local-path&quot;
+  ],
+  &quot;pvBad&quot;: [],
+  &quot;pvcBad&quot;: [],
+  &quot;pvCount&quot;: 3,
+  &quot;pvcCount&quot;: 3
+}</pre></td>
+  <td style="white-space:nowrap;">381 ms</td>
+</tr>
+
+    </tbody>
+  </table>
+
+  <div class="hint">
+    提示：若某些项提示 “权限不足/需要 RBAC: …”，请给运行巡检的凭据增加对应 list/get 权限。
+  </div>
+</body>
+</html>

@@ -1,0 +1,139 @@
+{
+  "runId": "20260108T080412Z-26857188",
+  "updatedAt": "2026-01-08T08:04:12.619464+00:00",
+  "durationMs": 575,
+  "summary": {
+    "total": 7,
+    "ok": 5,
+    "warn": 2,
+    "error": 0,
+    "skip": 0
+  },
+  "items": [
+    {
+      "key": "events",
+      "title": "集群事件（Warning/Error）",
+      "level": "warn",
+      "detail": "Warning/Error 事件数：6",
+      "suggestion": "重点看 FailedScheduling / ImagePull / Unhealthy 等原因。",
+      "evidence": {
+        "samples": [
+          "default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem",
+          "default/k3s-node03 InvalidDiskCapacity: invalid capacity 0 on image filesystem",
+          "kube-system/svclb-traefik-eaa8d37f-5r4ft FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n",
+          "kube-system/svclb-traefik-eaa8d37f-gw5cv FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n",
+          "logging/loki-canary-cszl4 FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n",
+          "logging/promtail-8hlfs FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n"
+        ],
+        "totalEvents": 97,
+        "badEvents": 6
+      },
+      "durationMs": 571
+    },
+    {
+      "key": "pods_abnormal",
+      "title": "业务 Pod 异常（CrashLoop/ImagePull/频繁重启）",
+      "level": "warn",
+      "detail": "高重启：31",
+      "suggestion": "结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。",
+      "evidence": {
+        "totalPods": 27,
+        "crashSamples": [],
+        "imagePullSamples": [],
+        "highRestartSamples": [
+          "kube-system/coredns-5688667fd4-75tzb(restarts=7)",
+          "kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=8)",
+          "kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=7)",
+          "kube-system/traefik-c98fdf6fb-cm6tg(restarts=7)",
+          "logging/loki-0(restarts=7)",
+          "logging/loki-0(restarts=7)",
+          "logging/loki-canary-jm4sm(restarts=7)",
+          "logging/loki-canary-l7jgz(restarts=7)",
+          "logging/loki-canary-ng424(restarts=7)",
+          "logging/loki-gateway-569b955fd6-lzls5(restarts=18)",
+          "logging/promtail-2hr9w(restarts=7)",
+          "logging/promtail-rvbhb(restarts=7)",
+          "logging/promtail-vl94d(restarts=7)",
+          "monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=7)"
+        ]
+      },
+      "durationMs": 445
+    },
+    {
+      "key": "kube_dns",
+      "title": "kube-dns Endpoints（是否为空）",
+      "level": "ok",
+      "detail": "kube-dns Endpoints 正常",
+      "suggestion": null,
+      "evidence": {
+        "addresses": 1
+      },
+      "durationMs": 321
+    },
+    {
+      "key": "kube_system_core_pods",
+      "title": "kube-system 核心组件 Pod 状态",
+      "level": "ok",
+      "detail": "核心组件正常",
+      "suggestion": null,
+      "evidence": {
+        "matched": 3,
+        "bad": []
+      },
+      "durationMs": 123
+    },
+    {
+      "key": "nodes_ready",
+      "title": "节点状态（Ready/可调度）",
+      "level": "ok",
+      "detail": "节点总数：4",
+      "suggestion": null,
+      "evidence": {
+        "total": 4,
+        "notReady": [],
+        "schedulingDisabled": []
+      },
+      "durationMs": 44
+    },
+    {
+      "key": "prometheus",
+      "title": "Prometheus 采集状态",
+      "level": "ok",
+      "detail": "Prometheus 可用（up > 0）",
+      "suggestion": null,
+      "evidence": {
+        "sum_up": 24.0
+      },
+      "durationMs": 10
+    },
+    {
+      "key": "storage",
+      "title": "存储（StorageClass / PV / PVC）",
+      "level": "ok",
+      "detail": "SC:1 PV:3 PVC:3",
+      "suggestion": null,
+      "evidence": {
+        "storageClasses": [
+          "local-path"
+        ],
+        "pvBad": [],
+        "pvcBad": [],
+        "pvCount": 3,
+        "pvcCount": 3
+      },
+      "durationMs": 381
+    }
+  ],
+  "meta": {
+    "enablePrometheus": true,
+    "include": [],
+    "perCheckTimeoutSeconds": 5,
+    "totalTimeoutSeconds": 25
+  }
+}
