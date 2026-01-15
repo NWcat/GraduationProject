@@ -1,17 +1,26 @@
-# services/ai/forecast_mem.py
+﻿# services/ai/forecast_mem.py
 from __future__ import annotations
 
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
-import requests
-import pandas as pd
 
 from config import settings
-from services.ops.runtime_config import get_value  # ✅ DB override > settings/.env > default
+from services.ops.runtime_config import get_value  # ✅DB override > settings/.env > default
 
 from services.ai.cache import ai_cache
 from services.ai.schemas import TsPoint, BandPoint, MemHistoryResp, MemForecastResp, ErrorMetrics
-from services.ai.metrics import mae, rmse, mape
+from services.ai.forecast_core import ForecastConfig, query_range_tuples, fit_predict_prophet, clip_range, stable_hash
+from services.prometheus_client import instant_vector
+
+
+MEM_CONFIG = ForecastConfig(
+    min_points_absolute=30,
+    min_points_ratio=0.5,
+    baseline_band=2.0,
+    warmup_seconds=0,
+    prophet_growth="linear",
+    prophet_changepoint_prior_scale=0.05,
+)
 
 
 def _now_utc() -> datetime:
@@ -33,7 +42,7 @@ def _cfg_int(key: str, default: int) -> int:
 
 
 def _http_timeout() -> int:
-    # default：15（保持你原逻辑）；若 settings/.env 配了 HTTP_TIMEOUT_SECONDS 会覆盖；
+    # default？5（保持你原逻辑）；若 settings/.env 配了 HTTP_TIMEOUT_SECONDS 会覆盖；
     # 将来你把 HTTP_TIMEOUT_SECONDS 加进 SPECS 后，也能被 DB override 覆盖
     default = int(getattr(settings, "HTTP_TIMEOUT_SECONDS", 15) or 15)
     return _cfg_int("HTTP_TIMEOUT_SECONDS", default)
@@ -41,7 +50,7 @@ def _http_timeout() -> int:
 
 def _prom_base() -> str:
     """
-    读取 Prometheus Base URL（包含 /api/v1）
+    读取 Prometheus Base URL（包含/api/v1）
     规则：DB 覆盖优先 -> 否则回落 settings/.env 默认 -> 否则 default
     """
     base = _cfg_str("PROMETHEUS_BASE", str(getattr(settings, "PROMETHEUS_BASE", "") or ""))
@@ -51,31 +60,7 @@ def _prom_base() -> str:
 
 
 def _query_instant(promql: str) -> List[Dict[str, Any]]:
-    url = f"{_prom_base()}/query"
-    r = requests.get(url, params={"query": promql}, timeout=_http_timeout())
-    r.raise_for_status()
-    data = r.json()
-    return (((data or {}).get("data") or {}).get("result") or [])
-
-
-def _query_range(promql: str, start: datetime, end: datetime, step_sec: int) -> List[Tuple[int, float]]:
-    url = f"{_prom_base()}/query_range"
-    params = {"query": promql, "start": start.timestamp(), "end": end.timestamp(), "step": step_sec}
-    r = requests.get(url, params=params, timeout=_http_timeout())
-    r.raise_for_status()
-    data = r.json()
-    result = (((data or {}).get("data") or {}).get("result") or [])
-    if not result:
-        return []
-
-    values = result[0].get("values") or []
-    out: List[Tuple[int, float]] = []
-    for ts, v in values:
-        try:
-            out.append((int(float(ts)), float(v)))
-        except Exception:
-            continue
-    return out
+    return instant_vector(promql) or []
 
 
 def _pick_instance_for_node(node: str) -> Optional[str]:
@@ -85,12 +70,12 @@ def _pick_instance_for_node(node: str) -> Optional[str]:
     1) node_uname_info{nodename="..."} -> instance 精确映射
     2) 兜底：instance=~"{node}.*"
 
-    ❌ 不再“随便取一个 instance”
+    ❌不再“随便取一个 instance”
     """
     if ":" in node:
         return node
 
-    # ✅ 1) 最稳：nodename 精确映射
+    # ✅1) 最稳：nodename 精确映射
     try:
         rs = _query_instant(f'count by (instance) (node_uname_info{{nodename="{node}"}})')
         if rs:
@@ -111,7 +96,7 @@ def _pick_instance_for_node(node: str) -> Optional[str]:
 
 def _default_node_mem_promql(node: str) -> Tuple[str, str]:
     """
-    节点内存使用率% = (1 - MemAvailable/MemTotal) * 100
+    节点内存使用率 = (1 - MemAvailable/MemTotal) * 100
     强制解析 instance，否则报错。
     """
     inst = _pick_instance_for_node(node)
@@ -129,17 +114,7 @@ def _default_node_mem_promql(node: str) -> Tuple[str, str]:
 
 
 def _clip_percent(points: List[BandPoint]) -> List[BandPoint]:
-    out: List[BandPoint] = []
-    for p in points:
-        out.append(
-            BandPoint(
-                ts=p.ts,
-                yhat=max(0.0, min(100.0, p.yhat)),
-                yhat_lower=max(0.0, min(100.0, p.yhat_lower)),
-                yhat_upper=max(0.0, min(100.0, p.yhat_upper)),
-            )
-        )
-    return out
+    return clip_range(points, 0.0, 100.0)
 
 
 def get_mem_history(node: str, minutes: int, step: int, promql: Optional[str] = None) -> MemHistoryResp:
@@ -151,7 +126,7 @@ def get_mem_history(node: str, minutes: int, step: int, promql: Optional[str] = 
 
     end = _now_utc()
     start = end - timedelta(minutes=minutes)
-    points = _query_range(q, start=start, end=end, step_sec=step)
+    points = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
     series = [TsPoint(ts=t, value=v) for (t, v) in points]
     return MemHistoryResp(
         node=node,
@@ -165,50 +140,6 @@ def get_mem_history(node: str, minutes: int, step: int, promql: Optional[str] = 
             "points": len(series),
         },
     )
-
-
-def _fit_predict_prophet(history: List[Tuple[int, float]], horizon_minutes: int, step: int) -> Tuple[List[BandPoint], ErrorMetrics]:
-    if len(history) < 20:
-        return [], ErrorMetrics(note="not enough data")
-
-    df = pd.DataFrame(history, columns=["ts", "y"])
-    df["ds"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_localize(None)
-    df = df[["ds", "y"]]
-    df["y"] = df["y"].astype(float)
-
-    try:
-        from prophet import Prophet  # type: ignore
-    except Exception as e:
-        raise RuntimeError(f"prophet not installed: {e}")
-
-    model = Prophet(daily_seasonality=False, weekly_seasonality=False)
-    model.fit(df)
-
-    periods = max(1, int(horizon_minutes * 60 / step))
-    future = model.make_future_dataframe(periods=periods, freq=f"{step}S", include_history=False)
-    fc = model.predict(future)
-
-    forecast: List[BandPoint] = []
-    for _, row in fc.iterrows():
-        ts = int(pd.Timestamp(row["ds"]).timestamp())
-        forecast.append(
-            BandPoint(
-                ts=ts,
-                yhat=float(row["yhat"]),
-                yhat_lower=float(row["yhat_lower"]),
-                yhat_upper=float(row["yhat_upper"]),
-            )
-        )
-
-    y_true = [v for _, v in history[-periods:]] if len(history) >= periods else []
-    y_pred = [p.yhat for p in forecast[: len(y_true)]]
-    metrics = ErrorMetrics(
-        mae=float(mae(y_true, y_pred)),
-        rmse=float(rmse(y_true, y_pred)),
-        mape=float(mape(y_true, y_pred)),
-        note="tail backtest",
-    )
-    return forecast, metrics
 
 
 def get_mem_forecast(
@@ -226,17 +157,17 @@ def get_mem_forecast(
     else:
         q, resolved_instance = _default_node_mem_promql(node)
 
-    cache_key = f"mem_forecast|node={node}|inst={resolved_instance}|m={minutes}|h={horizon}|s={step}|q={hash(q)}"
+    cache_key = f"mem_forecast|node={node}|inst={resolved_instance}|m={minutes}|h={horizon}|s={step}|q={stable_hash(q)}"
     cached = ai_cache.get(cache_key)
     if cached:
         return cached
 
     end = _now_utc()
     start = end - timedelta(minutes=minutes)
-    history = _query_range(q, start=start, end=end, step_sec=step)
+    history = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
 
     history_series = [TsPoint(ts=t, value=v) for (t, v) in history]
-    forecast_series, metrics = _fit_predict_prophet(history, horizon_minutes=horizon, step=step)
+    forecast_series, metrics = fit_predict_prophet(history, horizon_minutes=horizon, step=step, config=MEM_CONFIG)
     forecast_series = _clip_percent(forecast_series)
 
     resp = MemForecastResp(

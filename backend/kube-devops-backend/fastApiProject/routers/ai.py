@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, HTTPException
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 
 from services.ai.forecast_cpu import get_cpu_history, get_cpu_forecast
 from services.ai.forecast_mem import get_mem_history, get_mem_forecast
@@ -169,6 +169,92 @@ def pod_cpu_forecast(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pod_cpu_forecast failed: {e}")
+
+
+# ========================= Unified Forecast =========================
+@router.get("/forecast", response_model=Union[CpuForecastResp, MemForecastResp, PodCpuForecastResp])
+def unified_forecast(
+    target: Target = Query(...),
+    node: Optional[str] = Query(None),
+    namespace: Optional[str] = Query(None),
+    pod: Optional[str] = Query(None),
+    history_minutes: Optional[int] = Query(None, ge=10, le=7 * 24 * 60),
+    horizon_minutes: Optional[int] = Query(None, ge=1, le=24 * 60),
+    minutes: Optional[int] = Query(None, ge=10, le=7 * 24 * 60, description="(compat)"),
+    horizon: Optional[int] = Query(None, ge=1, le=24 * 60, description="(compat)"),
+    step: int = Query(60, ge=1, le=3600),
+    cache_ttl: int = Query(300, ge=0, le=3600),
+    promql: Optional[str] = Query(None),
+):
+    hm = _pick_history_minutes(history_minutes, minutes, default=240)
+    hz = _pick_horizon_minutes(horizon_minutes, horizon, default=120)
+
+    if target == "node_cpu":
+        if not node:
+            raise HTTPException(status_code=400, detail="node is required for target=node_cpu")
+        if hm < 30:
+            raise HTTPException(status_code=400, detail="history_minutes must be >= 30 for target=node_cpu")
+        if hz < 15:
+            raise HTTPException(status_code=400, detail="horizon_minutes must be >= 15 for target=node_cpu")
+        if step < 5:
+            raise HTTPException(status_code=400, detail="step must be >= 5 for target=node_cpu")
+    elif target == "node_mem":
+        if not node:
+            raise HTTPException(status_code=400, detail="node is required for target=node_mem")
+        if hm < 10:
+            raise HTTPException(status_code=400, detail="history_minutes must be >= 10 for target=node_mem")
+        if hz < 1:
+            raise HTTPException(status_code=400, detail="horizon_minutes must be >= 1 for target=node_mem")
+    elif target == "pod_cpu":
+        if not namespace or not pod:
+            raise HTTPException(status_code=400, detail="namespace and pod are required for target=pod_cpu")
+        if hm < 10:
+            raise HTTPException(status_code=400, detail="history_minutes must be >= 10 for target=pod_cpu")
+        if hz < 1:
+            raise HTTPException(status_code=400, detail="horizon_minutes must be >= 1 for target=pod_cpu")
+    else:
+        raise HTTPException(status_code=400, detail=f"unsupported target: {target}")
+
+    try:
+        if target == "node_cpu":
+            resp = get_cpu_forecast(
+                node=node,
+                minutes=hm,
+                horizon=hz,
+                step=step,
+                cache_ttl=cache_ttl,
+                promql=promql,
+            )
+        elif target == "node_mem":
+            resp = get_mem_forecast(
+                node=node,
+                minutes=hm,
+                horizon=hz,
+                step=step,
+                cache_ttl=cache_ttl,
+                promql=promql,
+            )
+        else:
+            resp = get_pod_cpu_forecast(
+                namespace=namespace,
+                pod=pod,
+                minutes=hm,
+                horizon=hz,
+                step=step,
+                cache_ttl=cache_ttl,
+                promql=promql,
+            )
+
+        meta = resp.meta or {}
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["target"] = target
+            resp.meta = meta
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"unified_forecast failed: {e}")
 
 
 # ===== 智能建议（规则+异常+可选LLM总结）=====

@@ -1,15 +1,24 @@
-# services/ai/forecast_pod_cpu.py
+﻿# services/ai/forecast_pod_cpu.py
 from __future__ import annotations
 
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
-import requests
-import pandas as pd
 
 from services.ai.cache import ai_cache
 from services.ai.schemas import TsPoint, BandPoint, PodCpuHistoryResp, PodCpuForecastResp, ErrorMetrics
-from services.ai.metrics import mae, rmse, mape
-from services.ops.runtime_config import get_value  # ✅ DB override > settings/.env > default
+from services.ai.forecast_core import ForecastConfig, query_range_tuples, fit_predict_prophet, clip_non_negative, stable_hash
+from services.ops.runtime_config import get_value  # ✅DB override > settings/.env > default
+from services.prometheus_client import instant_vector
+
+
+POD_CPU_CONFIG = ForecastConfig(
+    min_points_absolute=30,
+    min_points_ratio=0.5,
+    baseline_band=2.0,
+    warmup_seconds=0,
+    prophet_growth="linear",
+    prophet_changepoint_prior_scale=0.05,
+)
 
 
 def _now_utc() -> datetime:
@@ -31,7 +40,7 @@ def _cfg_int(key: str, default: int) -> int:
 
 
 def _http_timeout() -> int:
-    # 默认保持原行为：15s；如果 settings/.env 配了 HTTP_TIMEOUT_SECONDS 或 DB override（若你将来加进 SPECS）则覆盖
+    # 默认保持原行为：15s；如果 settings/.env 配了 HTTP_TIMEOUT_SECONDS 或 DB override（若你将来加进SPECS）则覆盖
     try:
         from config import settings  # type: ignore
         default = int(getattr(settings, "HTTP_TIMEOUT_SECONDS", 15) or 15)
@@ -41,7 +50,7 @@ def _http_timeout() -> int:
 
 
 def _prom_base() -> str:
-    # ✅ 优先 DB override，其次 settings/.env，最后 default
+    # ✅优先 DB override，其次 settings/.env，最后 default
     base = ""
     try:
         from config import settings  # type: ignore
@@ -55,30 +64,7 @@ def _prom_base() -> str:
 
 
 def _query_instant(promql: str) -> List[Dict[str, Any]]:
-    url = f"{_prom_base()}/query"
-    r = requests.get(url, params={"query": promql}, timeout=_http_timeout())
-    r.raise_for_status()
-    data = r.json()
-    return (((data or {}).get("data") or {}).get("result") or [])
-
-
-def _query_range(promql: str, start: datetime, end: datetime, step_sec: int) -> List[Tuple[int, float]]:
-    url = f"{_prom_base()}/query_range"
-    params = {"query": promql, "start": start.timestamp(), "end": end.timestamp(), "step": step_sec}
-    r = requests.get(url, params=params, timeout=_http_timeout())
-    r.raise_for_status()
-    data = r.json()
-    result = (((data or {}).get("data") or {}).get("result") or [])
-    if not result:
-        return []
-    values = result[0].get("values") or []
-    out: List[Tuple[int, float]] = []
-    for ts, v in values:
-        try:
-            out.append((int(float(ts)), float(v)))
-        except Exception:
-            continue
-    return out
+    return instant_vector(promql) or []
 
 
 def _default_pod_cpu_promql(namespace: str, pod: str, window: str = "2m") -> str:
@@ -114,20 +100,6 @@ def _try_get_pod_cpu_limit_mcpu(namespace: str, pod: str) -> Optional[float]:
         return None
 
 
-def _clip_non_negative(points: List[BandPoint]) -> List[BandPoint]:
-    out: List[BandPoint] = []
-    for p in points:
-        out.append(
-            BandPoint(
-                ts=p.ts,
-                yhat=max(0.0, p.yhat),
-                yhat_lower=max(0.0, p.yhat_lower),
-                yhat_upper=max(0.0, p.yhat_upper),
-            )
-        )
-    return out
-
-
 def get_pod_cpu_history(
     namespace: str,
     pod: str,
@@ -138,7 +110,7 @@ def get_pod_cpu_history(
     q = promql or _default_pod_cpu_promql(namespace, pod)
     end = _now_utc()
     start = end - timedelta(minutes=minutes)
-    points = _query_range(q, start=start, end=end, step_sec=step)
+    points = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
     series = [TsPoint(ts=t, value=v) for (t, v) in points]
 
     limit_mcpu = _try_get_pod_cpu_limit_mcpu(namespace, pod)
@@ -152,50 +124,6 @@ def get_pod_cpu_history(
     return PodCpuHistoryResp(namespace=namespace, pod=pod, minutes=minutes, step=step, series=series, meta=meta)
 
 
-def _fit_predict_prophet(history: List[Tuple[int, float]], horizon_minutes: int, step: int) -> Tuple[List[BandPoint], ErrorMetrics]:
-    if len(history) < 20:
-        return [], ErrorMetrics(note="not enough data")
-
-    df = pd.DataFrame(history, columns=["ts", "y"])
-    df["ds"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_localize(None)
-    df = df[["ds", "y"]]
-    df["y"] = df["y"].astype(float)
-
-    try:
-        from prophet import Prophet  # type: ignore
-    except Exception as e:
-        raise RuntimeError(f"prophet not installed: {e}")
-
-    model = Prophet(daily_seasonality=False, weekly_seasonality=False)
-    model.fit(df)
-
-    periods = max(1, int(horizon_minutes * 60 / step))
-    future = model.make_future_dataframe(periods=periods, freq=f"{step}S", include_history=False)
-    fc = model.predict(future)
-
-    forecast: List[BandPoint] = []
-    for _, row in fc.iterrows():
-        ts = int(pd.Timestamp(row["ds"]).timestamp())
-        forecast.append(
-            BandPoint(
-                ts=ts,
-                yhat=float(row["yhat"]),
-                yhat_lower=float(row["yhat_lower"]),
-                yhat_upper=float(row["yhat_upper"]),
-            )
-        )
-
-    y_true = [v for _, v in history[-periods:]] if len(history) >= periods else []
-    y_pred = [p.yhat for p in forecast[: len(y_true)]]
-    metrics = ErrorMetrics(
-        mae=float(mae(y_true, y_pred)),
-        rmse=float(rmse(y_true, y_pred)),
-        mape=float(mape(y_true, y_pred)),
-        note="tail backtest",
-    )
-    return forecast, metrics
-
-
 def get_pod_cpu_forecast(
     namespace: str,
     pod: str,
@@ -206,18 +134,18 @@ def get_pod_cpu_forecast(
     promql: Optional[str] = None,
 ) -> PodCpuForecastResp:
     q = promql or _default_pod_cpu_promql(namespace, pod)
-    cache_key = f"pod_cpu_forecast|ns={namespace}|pod={pod}|m={minutes}|h={horizon}|s={step}|q={hash(q)}"
+    cache_key = f"pod_cpu_forecast|ns={namespace}|pod={pod}|m={minutes}|h={horizon}|s={step}|q={stable_hash(q)}"
     cached = ai_cache.get(cache_key)
     if cached:
         return cached
 
     end = _now_utc()
     start = end - timedelta(minutes=minutes)
-    history = _query_range(q, start=start, end=end, step_sec=step)
+    history = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
     history_series = [TsPoint(ts=t, value=v) for (t, v) in history]
 
-    forecast_series, metrics = _fit_predict_prophet(history, horizon_minutes=horizon, step=step)
-    forecast_series = _clip_non_negative(forecast_series)
+    forecast_series, metrics = fit_predict_prophet(history, horizon_minutes=horizon, step=step, config=POD_CPU_CONFIG)
+    forecast_series = clip_non_negative(forecast_series)
 
     limit_mcpu = _try_get_pod_cpu_limit_mcpu(namespace, pod)
 

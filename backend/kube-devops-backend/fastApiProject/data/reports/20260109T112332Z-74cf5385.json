@@ -1,0 +1,152 @@
+{
+  "runId": "20260109T112332Z-74cf5385",
+  "updatedAt": "2026-01-09T11:23:33.600225+00:00",
+  "durationMs": 862,
+  "summary": {
+    "total": 7,
+    "ok": 4,
+    "warn": 2,
+    "error": 1,
+    "skip": 0
+  },
+  "items": [
+    {
+      "key": "nodes_ready",
+      "title": "节点状态（Ready/可调度）",
+      "level": "error",
+      "detail": "节点总数：4；NotReady：k3s-node03；SchedulingDisabled：k3s-node03",
+      "suggestion": "检查对应节点的 kubelet/containerd/flannel 状态与资源压力（Memory/Disk/PIDPressure）。",
+      "evidence": {
+        "total": 4,
+        "notReady": [
+          "k3s-node03"
+        ],
+        "schedulingDisabled": [
+          "k3s-node03"
+        ]
+      },
+      "durationMs": 44
+    },
+    {
+      "key": "events",
+      "title": "集群事件（Warning/Error）",
+      "level": "warn",
+      "detail": "Warning/Error 事件数：15",
+      "suggestion": "重点看 FailedScheduling / ImagePull / Unhealthy 等原因。",
+      "evidence": {
+        "samples": [
+          "default/k3s-master Rebooted: Node k3s-master has been rebooted, boot id: b96fa8c8-66f2-4717-a684-238aec0a6a24",
+          "default/k3s-node01 InvalidDiskCapacity: invalid capacity 0 on image filesystem",
+          "default/k3s-node01 Rebooted: Node k3s-node01 has been rebooted, boot id: 2e27a496-f09e-47e1-8827-e2aec4128453",
+          "default/k3s-node02 InvalidDiskCapacity: invalid capacity 0 on image filesystem",
+          "default/k3s-node02 Rebooted: Node k3s-node02 has been rebooted, boot id: f98a4607-d5e3-4120-8f44-0dd516343a00",
+          "kube-system/metrics-server-6f4c6675d5-2k5l8 Unhealthy: Readiness probe failed: HTTP probe failed with statuscode: 500",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk FailedCreatePodSandBox: Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n",
+          "kube-system/svclb-traefik-eaa8d37f-gw5cv NodeNotReady: Node is not ready",
+          "logging/loki-0 Unhealthy: Readiness probe failed: HTTP probe failed with statuscode: 503",
+          "logging/loki-canary-cszl4 NodeNotReady: Node is not ready",
+          "logging/loki-gateway-569b955fd6-lzls5 BackOff: Back-off restarting failed container nginx in pod loki-gateway-569b955fd6-lzls5_",
+          "logging/promtail-8hlfs NodeNotReady: Node is not ready",
+          "monitoring/kube-prometheus-stack-grafana-7785fd8465-z8sg7 Unhealthy: Readiness probe failed: Get \"http://10.42.2.161:3000/api/health\": dial tcp 10.42",
+          "monitoring/kube-prometheus-stack-prometheus-node-exporter-rc825 NodeNotReady: Node is not ready",
+          "monitoring/prometheus-kube-prometheus-stack-prometheus-0 Unhealthy: Startup probe failed: HTTP probe failed with statuscode: 503"
+        ],
+        "totalEvents": 212,
+        "badEvents": 15
+      },
+      "durationMs": 505
+    },
+    {
+      "key": "pods_abnormal",
+      "title": "业务 Pod 异常（CrashLoop/ImagePull/频繁重启）",
+      "level": "warn",
+      "detail": "高重启：31",
+      "suggestion": "结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。",
+      "evidence": {
+        "totalPods": 28,
+        "crashSamples": [],
+        "imagePullSamples": [],
+        "highRestartSamples": [
+          "kube-system/coredns-5688667fd4-75tzb(restarts=8)",
+          "kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=9)",
+          "kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=8)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=8)",
+          "kube-system/traefik-c98fdf6fb-cm6tg(restarts=8)",
+          "logging/loki-0(restarts=8)",
+          "logging/loki-0(restarts=8)",
+          "logging/loki-canary-jm4sm(restarts=8)",
+          "logging/loki-canary-l7jgz(restarts=8)",
+          "logging/loki-canary-ng424(restarts=8)",
+          "logging/loki-gateway-569b955fd6-lzls5(restarts=21)",
+          "logging/promtail-2hr9w(restarts=8)",
+          "logging/promtail-rvbhb(restarts=8)",
+          "logging/promtail-vl94d(restarts=8)",
+          "monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=8)"
+        ]
+      },
+      "durationMs": 854
+    },
+    {
+      "key": "kube_dns",
+      "title": "kube-dns Endpoints（是否为空）",
+      "level": "ok",
+      "detail": "kube-dns Endpoints 正常",
+      "suggestion": null,
+      "evidence": {
+        "addresses": 1
+      },
+      "durationMs": 466
+    },
+    {
+      "key": "kube_system_core_pods",
+      "title": "kube-system 核心组件 Pod 状态",
+      "level": "ok",
+      "detail": "核心组件正常",
+      "suggestion": null,
+      "evidence": {
+        "matched": 3,
+        "bad": []
+      },
+      "durationMs": 140
+    },
+    {
+      "key": "prometheus",
+      "title": "Prometheus 采集状态",
+      "level": "ok",
+      "detail": "Prometheus 可用（up > 0）",
+      "suggestion": null,
+      "evidence": {
+        "sum_up": 20.0
+      },
+      "durationMs": 50
+    },
+    {
+      "key": "storage",
+      "title": "存储（StorageClass / PV / PVC）",
+      "level": "ok",
+      "detail": "SC:1 PV:3 PVC:3",
+      "suggestion": null,
+      "evidence": {
+        "storageClasses": [
+          "local-path"
+        ],
+        "pvBad": [],
+        "pvcBad": [],
+        "pvCount": 3,
+        "pvcCount": 3
+      },
+      "durationMs": 465
+    }
+  ],
+  "meta": {
+    "enablePrometheus": true,
+    "include": [],
+    "perCheckTimeoutSeconds": 5,
+    "totalTimeoutSeconds": 25
+  }
+}
