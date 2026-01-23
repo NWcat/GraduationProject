@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 from typing import List, Optional, Tuple, Dict, Any
-from datetime import datetime, timezone, timedelta
 
 from services.ai.cache import ai_cache
 from services.ai.schemas import TsPoint, BandPoint, PodCpuHistoryResp, PodCpuForecastResp, ErrorMetrics
-from services.ai.forecast_core import ForecastConfig, query_range_tuples, fit_predict_prophet, clip_non_negative, stable_hash
+from services.ai.forecast_core import (
+    ForecastConfig,
+    clip_non_negative,
+    stable_hash,
+    build_contract_meta,
+    build_history_series,
+    build_forecast_series,
+)
 from services.ops.runtime_config import get_value  # ✅DB override > settings/.env > default
 from services.prometheus_client import instant_vector
 
@@ -19,10 +25,6 @@ POD_CPU_CONFIG = ForecastConfig(
     prophet_growth="linear",
     prophet_changepoint_prior_scale=0.05,
 )
-
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _cfg_str(key: str, default: str) -> str:
@@ -108,19 +110,24 @@ def get_pod_cpu_history(
     promql: Optional[str] = None,
 ) -> PodCpuHistoryResp:
     q = promql or _default_pod_cpu_promql(namespace, pod)
-    end = _now_utc()
-    start = end - timedelta(minutes=minutes)
-    points = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
+    points = build_history_series(q, minutes, step)
     series = [TsPoint(ts=t, value=v) for (t, v) in points]
 
     limit_mcpu = _try_get_pod_cpu_limit_mcpu(namespace, pod)
-    meta: Dict[str, Any] = {
-        "promql": q,
-        "prom_base": _prom_base(),
-        "points": len(series),
-        "unit": "mCPU",
-        "limit_mcpu": limit_mcpu,
-    }
+    meta: Dict[str, Any] = build_contract_meta(
+        target="pod_cpu",
+        unit="mCPU",
+        promql=q,
+        history_points=len(series),
+        forecast_points=0,
+    )
+    meta.update(
+        {
+            "prom_base": _prom_base(),
+            "points": len(series),
+            "limit_mcpu": limit_mcpu,
+        }
+    )
     return PodCpuHistoryResp(namespace=namespace, pod=pod, minutes=minutes, step=step, series=series, meta=meta)
 
 
@@ -139,13 +146,15 @@ def get_pod_cpu_forecast(
     if cached:
         return cached
 
-    end = _now_utc()
-    start = end - timedelta(minutes=minutes)
-    history = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
+    history, forecast_series, metrics = build_forecast_series(
+        q,
+        minutes,
+        horizon,
+        step,
+        POD_CPU_CONFIG,
+        clip_fn=clip_non_negative,
+    )
     history_series = [TsPoint(ts=t, value=v) for (t, v) in history]
-
-    forecast_series, metrics = fit_predict_prophet(history, horizon_minutes=horizon, step=step, config=POD_CPU_CONFIG)
-    forecast_series = clip_non_negative(forecast_series)
 
     limit_mcpu = _try_get_pod_cpu_limit_mcpu(namespace, pod)
 
@@ -159,12 +168,15 @@ def get_pod_cpu_forecast(
         forecast=forecast_series,
         metrics=metrics,
         meta={
-            "promql": q,
+            **build_contract_meta(
+                target="pod_cpu",
+                unit="mCPU",
+                promql=q,
+                history_points=len(history_series),
+                forecast_points=len(forecast_series),
+            ),
             "prom_base": _prom_base(),
-            "unit": "mCPU",
             "limit_mcpu": limit_mcpu,
-            "history_points": len(history_series),
-            "forecast_points": len(forecast_series),
         },
     )
     ai_cache.set(cache_key, resp, ttl=cache_ttl)

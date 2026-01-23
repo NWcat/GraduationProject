@@ -32,3 +32,28 @@ class TTLCache:
 
 
 ai_cache = TTLCache()
+
+
+def build_suggestion_snapshot_key(suggestion_id: str) -> str:
+    return f"suggestion_snapshot|id={suggestion_id}"
+
+
+def build_task_key(task_id: str) -> str:
+    return f"ai_task|id={task_id}"
+
+
+def get_task_state(task_id: str) -> Optional[Dict[str, Any]]:
+    if not task_id:
+        return None
+    key = build_task_key(task_id)
+    cached = ai_cache.get(key)
+    if isinstance(cached, dict):
+        return cached
+    return None
+
+
+def set_task_state(task_id: str, state: Dict[str, Any], ttl: int):
+    if not task_id:
+        return
+    key = build_task_key(task_id)
+    ai_cache.set(key, state, ttl)

@@ -1,30 +1,34 @@
 # routers/prom.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from typing import Any, Dict
 
 from services.prometheus_client import prom_query, prom_query_range, instant_value
+from routers.authz import require_user
+from services.promql_guard import validate_promql, validate_range
 
 router = APIRouter(prefix="/api/prom", tags=["Prometheus"])
 
-
-@router.get("/query")
+@router.get("/query", dependencies=[Depends(require_user)])
 def query(query: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    validate_promql(query)
     return prom_query(query)
 
 
-@router.get("/query_range")
+@router.get("/query_range", dependencies=[Depends(require_user)])
 def query_range(
     query: str = Query(..., min_length=1),
     start: float = Query(...),
     end: float = Query(...),
     step: int = Query(30, ge=1),
 ) -> Dict[str, Any]:
+    validate_promql(query)
+    validate_range(start, end, step)
     return prom_query_range(query=query, start=start, end=end, step=step)
 
 
-@router.get("/overview")
+@router.get("/overview", dependencies=[Depends(require_user)])
 def overview(range: str = Query("15m")) -> Dict[str, Any]:
     """
     总览接口（BFF）

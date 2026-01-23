@@ -140,6 +140,33 @@ def scale_deployment(namespace: str, name: str, replicas: int) -> str:
     return (out_s or err_s or "").strip()
 
 
+def get_deployment_uid(namespace: str, name: str) -> Optional[str]:
+    ns = namespace or "default"
+    if _safe_k8s_client_enabled():
+        try:
+            apps = get_apps_v1()
+            dep = apps.read_namespaced_deployment(name=name, namespace=ns)
+            return str(dep.metadata.uid or "")
+        except Exception:
+            return None
+    code, out_s, err_s = run_kubectl(["get", "deployment", name, "-n", ns, "-o", "jsonpath={.metadata.uid}"])
+    s = (out_s or err_s or "").strip()
+    if code != 0 or not s:
+        return None
+    return s
+
+
+def deployment_exists(namespace: str, name: str, expected_uid: Optional[str] = None) -> bool:
+    if not name or name == "unknown":
+        return False
+    uid = get_deployment_uid(namespace, name)
+    if not uid:
+        return False
+    if expected_uid and expected_uid != "unknown":
+        return str(uid) == str(expected_uid)
+    return True
+
+
 def restart_deployment(namespace: str, name: str) -> str:
     code, out_s, err_s = run_kubectl(["rollout", "restart", f"deployment/{name}", "-n", namespace])
     return (out_s or err_s or "").strip()

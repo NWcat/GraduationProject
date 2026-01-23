@@ -11,6 +11,10 @@ import { useAuthStore } from '@/stores/auth'
  */
 const baseURL = import.meta.env.VITE_API_BASE_URL || ''
 
+function genRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 export const http: AxiosInstance = axios.create({
   baseURL,
   timeout: 15000,
@@ -24,6 +28,10 @@ http.interceptors.request.use((config) => {
     config.headers = config.headers || {}
     config.headers.Authorization = `Bearer ${token}`
   }
+  config.headers = config.headers || {}
+  if (!config.headers['X-Request-Id']) {
+    config.headers['X-Request-Id'] = genRequestId()
+  }
   return config
 })
 
@@ -32,8 +40,16 @@ http.interceptors.response.use(
   async (err) => {
     const status = err?.response?.status
 
+    // ✅ 403：权限不足，不清 token，不跳转登录
+    if (status === 403) {
+      err.__ai_handled = true
+      ElMessage.warning('权限不足')
+      return Promise.reject(err)
+    }
+
     // ✅ 401：token 失效/未登录，清理并回登录
     if (status === 401) {
+      err.__ai_handled = true
       try {
         const auth = useAuthStore()
         auth.clear()
@@ -48,13 +64,12 @@ http.interceptors.response.use(
       return Promise.reject(err)
     }
 
-    // 统一提示
-    // const msg =
-    //   err?.response?.data?.message ||
-    //   err?.response?.data?.detail ||
-    //   err?.message ||
-    //   'Network Error'
-    // ElMessage.error(msg)
+    const requestId =
+      err?.config?.headers?.['X-Request-Id'] || err?.response?.headers?.['x-request-id']
+    const detail = err?.response?.data?.detail || err?.message || 'Network Error'
+    if (requestId) {
+      console.warn(`[request_id=${requestId}] ${detail}`)
+    }
     return Promise.reject(err)
   }
 )

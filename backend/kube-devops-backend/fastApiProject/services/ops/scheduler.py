@@ -6,7 +6,13 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from services.ops.healer import run_heal_scan_once
+from services.ops.healer import (
+    run_heal_scan_once,
+    acquire_heal_lock,
+    get_heal_lock_info,
+    get_heal_lock_owner_id,
+    release_heal_lock,
+)
 
 _stop_flag = False
 _thread: Optional[threading.Thread] = None
@@ -21,6 +27,9 @@ _last_error: Optional[str] = None
 # debug/observe
 _pid: int = os.getpid()
 _thread_ident: Optional[int] = None
+_lock_owner: Optional[str] = None
+_is_leader: bool = False
+_lock_info: Optional[Dict[str, Any]] = None
 
 
 def _get_runtime_value(key: str) -> Tuple[Any, str]:
@@ -79,6 +88,10 @@ def _get_interval_sec() -> int:
     return v
 
 
+def _get_lock_ttl_sec(interval_sec: int) -> int:
+    return max(30, int(interval_sec) * 2)
+
+
 def _sleep_interruptible(total_sec: int) -> None:
     """
     可中断 sleep：stop_healer() 后最多 1 秒内停止。
@@ -99,6 +112,7 @@ def start_healer(namespace: Optional[str] = None) -> None:
     """
     global _thread, _stop_flag, _running, _pid, _thread_ident
     global _last_run_ts, _next_run_ts, _last_summary, _last_error
+    global _lock_owner, _is_leader, _lock_info
 
     # ✅ 没启用就不启动
     if not _cfg_bool("HEAL_ENABLED", True):
@@ -116,6 +130,9 @@ def start_healer(namespace: Optional[str] = None) -> None:
     _running = True
     _pid = os.getpid()
     _last_error = None
+    _lock_owner = get_heal_lock_owner_id()
+    _is_leader = False
+    _lock_info = None
 
     def loop():
         global _running, _last_run_ts, _next_run_ts, _last_summary, _last_error, _thread_ident
@@ -130,6 +147,14 @@ def start_healer(namespace: Optional[str] = None) -> None:
             interval = _get_interval_sec()
             now = int(time.time())
             _next_run_ts = now + interval  # 先预估下一次
+
+            lock_ttl = _get_lock_ttl_sec(interval)
+            ok, info = acquire_heal_lock(_lock_owner or get_heal_lock_owner_id(), lock_ttl)
+            _is_leader = bool(ok)
+            _lock_info = info or get_heal_lock_info()
+            if not ok:
+                _sleep_interruptible(interval)
+                continue
 
             try:
                 res = run_heal_scan_once(namespace=namespace)
@@ -153,6 +178,7 @@ def start_healer(namespace: Optional[str] = None) -> None:
             _sleep_interruptible(interval)
 
         _running = False
+        _is_leader = False
 
     _thread = threading.Thread(target=loop, name="kube-guard-healer", daemon=True)
     _thread.start()
@@ -162,7 +188,7 @@ def stop_healer(timeout_sec: int = 3) -> None:
     """
     停止后台线程：设 stop flag + join。
     """
-    global _stop_flag, _thread, _running
+    global _stop_flag, _thread, _running, _lock_owner, _is_leader, _lock_info
 
     _stop_flag = True
 
@@ -173,6 +199,10 @@ def stop_healer(timeout_sec: int = 3) -> None:
         except Exception:
             pass
 
+    if _lock_owner and _is_leader:
+        release_heal_lock(_lock_owner)
+    _is_leader = False
+    _lock_info = None
     _running = False
 
 
@@ -183,6 +213,17 @@ def get_status() -> Dict[str, Any]:
     """
     interval = _get_interval_sec()
     alive = bool(_thread and _thread.is_alive())
+    lock_info = _lock_info or get_heal_lock_info()
+    lock_owner = None
+    is_leader = False
+    now_ts = int(time.time())
+    if isinstance(lock_info, dict):
+        lock_owner = lock_info.get("owner")
+        expire_at = int(lock_info.get("expire_at") or 0)
+        if expire_at and now_ts > expire_at:
+            lock_owner = None
+        elif _lock_owner and lock_owner and str(lock_owner) == str(_lock_owner):
+            is_leader = True
 
     enabled = _cfg_bool("HEAL_ENABLED", True)
     execute = _cfg_bool("HEAL_EXECUTE", False)
@@ -199,6 +240,7 @@ def get_status() -> Dict[str, Any]:
         "pid": _pid,
         "thread_ident": _thread_ident,
         "interval_sec": interval,
+        "interval": interval,
         "last_run_ts": _last_run_ts,
         "next_run_ts": _next_run_ts,
         "last_summary": _last_summary,
@@ -210,4 +252,6 @@ def get_status() -> Dict[str, Any]:
         "allow_ns": allow_ns,
         "deny_ns": deny_ns,
         "only_reasons": only_reasons,
+        "is_leader": is_leader,
+        "lock_owner": lock_owner,
     }

@@ -244,6 +244,30 @@ SPECS: Dict[str, ConfigSpec] = {
         example="30",
     ),
 
+    # ---- AI evolution ----
+    "AI_EVOLUTION_ENABLED": ConfigSpec(
+        key="AI_EVOLUTION_ENABLED",
+        typ="bool",
+        desc="规则引擎自我进化开关",
+        example="0",
+    ),
+    "AI_EVOLUTION_MIN_FEEDBACKS": ConfigSpec(
+        key="AI_EVOLUTION_MIN_FEEDBACKS",
+        typ="int",
+        desc="启用进化最少反馈数",
+        min_i=1,
+        max_i=1000,
+        example="3",
+    ),
+    "AI_EVOLUTION_MAX_DELTA": ConfigSpec(
+        key="AI_EVOLUTION_MAX_DELTA",
+        typ="float",
+        desc="单次调整的最大幅度（ratio）",
+        min_f=0.0,
+        max_f=0.5,
+        example="0.05",
+    ),
+
     # ---- healer ----
     "HEAL_ENABLED": ConfigSpec(
         key="HEAL_ENABLED",

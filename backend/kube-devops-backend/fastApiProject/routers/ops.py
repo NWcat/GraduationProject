@@ -1,6 +1,7 @@
 # routers/ops.py
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -8,7 +9,7 @@ from pydantic import BaseModel, Field
 from services.ops.heal_reset import reset_heal_state
 from services.ops.schemas import HealResetReq, HealResetResp
 from services.ops.audit import list_events, delete_event_by_id, list_actions, delete_action_by_id
-from services.ops.healer import run_heal_scan_once
+from services.ops.healer import run_heal_scan_once, get_heal_lock_info, get_heal_lock_owner_id
 from services.ops.scheduler import get_status
 from services.ops.heal_view import list_heal_deployments, get_heal_deployment_detail
 from services.alert_client import list_alerts
@@ -40,8 +41,18 @@ def heal_event_delete(event_id: int):
 @router.post("/heal/run")
 def heal_run_once(namespace: Optional[str] = None):
     try:
+        lock_info = get_heal_lock_info()
+        if isinstance(lock_info, dict):
+            owner = str(lock_info.get("owner") or "")
+            expire_at = int(lock_info.get("expire_at") or 0)
+            now_ts = int(time.time())
+            if owner and expire_at and now_ts <= expire_at:
+                if owner != get_heal_lock_owner_id():
+                    raise HTTPException(status_code=409, detail=f"heal lock held by {owner}")
         result = run_heal_scan_once(namespace=namespace)
         return {"ok": True, "result": result}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"heal run failed: {e}")
 

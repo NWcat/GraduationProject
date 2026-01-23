@@ -5,7 +5,7 @@ import json
 import time
 from typing import Any, Dict, List
 
-from db.sqlite import get_conn, q
+from db.sqlite import get_conn, q, write_with_retry
 
 MAX_FAILURE_COUNT = 3  # 保留也行（仅用于展示/外部代码需要），但 log_heal_event 不再用它推进状态
 
@@ -18,24 +18,27 @@ def log_action(
     result: str,
     detail: str,
 ):
-    conn = get_conn()
-    try:
-        q(
-            conn,
-            "INSERT INTO ops_actions(ts, action, target, params, dry_run, result, detail) VALUES(?,?,?,?,?,?,?)",
-            (
-                int(time.time()),
-                action,
-                json.dumps(target, ensure_ascii=False, default=str),
-                json.dumps(params, ensure_ascii=False, default=str),
-                1 if dry_run else 0,
-                result,
-                detail,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    def _op() -> None:
+        conn = get_conn()
+        try:
+            q(
+                conn,
+                "INSERT INTO ops_actions(ts, action, target, params, dry_run, result, detail) VALUES(?,?,?,?,?,?,?)",
+                (
+                    int(time.time()),
+                    action,
+                    json.dumps(target, ensure_ascii=False, default=str),
+                    json.dumps(params, ensure_ascii=False, default=str),
+                    1 if dry_run else 0,
+                    result,
+                    detail,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    write_with_retry(_op)
 
 
 def list_events(limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -59,23 +62,29 @@ def list_actions(limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
 
 
 def delete_event_by_id(event_id: int) -> bool:
-    conn = get_conn()
-    try:
-        cur = q(conn, "DELETE FROM heal_events WHERE id=?", (int(event_id),))
-        conn.commit()
-        return (cur.rowcount or 0) > 0
-    finally:
-        conn.close()
+    def _op() -> bool:
+        conn = get_conn()
+        try:
+            cur = q(conn, "DELETE FROM heal_events WHERE id=?", (int(event_id),))
+            conn.commit()
+            return (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+
+    return bool(write_with_retry(_op))
 
 
 def delete_action_by_id(action_id: int) -> bool:
-    conn = get_conn()
-    try:
-        cur = q(conn, "DELETE FROM ops_actions WHERE id=?", (int(action_id),))
-        conn.commit()
-        return (cur.rowcount or 0) > 0
-    finally:
-        conn.close()
+    def _op() -> bool:
+        conn = get_conn()
+        try:
+            cur = q(conn, "DELETE FROM ops_actions WHERE id=?", (int(action_id),))
+            conn.commit()
+            return (cur.rowcount or 0) > 0
+        finally:
+            conn.close()
+
+    return bool(write_with_retry(_op))
 
 
 def log_heal_event(
@@ -105,74 +114,77 @@ def log_heal_event(
 
     now_ts = int(time.time())
 
-    conn = get_conn()
-    try:
-        cur = q(
-            conn,
-            "SELECT id, fail_count, is_failing FROM heal_events WHERE namespace=? AND deployment_uid=?",
-            (namespace, key_uid),
-        )
-        row = cur.fetchone()
+    def _op() -> Dict[str, Any]:
+        conn = get_conn()
+        try:
+            cur = q(
+                conn,
+                "SELECT id, fail_count, is_failing FROM heal_events WHERE namespace=? AND deployment_uid=?",
+                (namespace, key_uid),
+            )
+            row = cur.fetchone()
 
-        if row:
-            new_fail = int(row["fail_count"] or 0) + inc
+            if row:
+                new_fail = int(row["fail_count"] or 0) + inc
 
-            # ✅ 注意：这里的 is_failing 只是“事件表历史字段”，不作为真相。
-            # 既然按 A 真相在 heal_state，我们这里不主动改 is_failing，避免语义混乱。
+                # ? 注意：这里的 is_failing 只是“事件表历史字段”，不作为真相。
+                # 既然按 A 真相在 heal_state，我们这里不主动改 is_failing，避免语义混乱。
+                q(
+                    conn,
+                    """
+                    UPDATE heal_events
+                    SET ts=?, deployment_name=?, pod=?, pod_uid=?, reason=?, action=?, result=?, fail_count=?
+                    WHERE id=?
+                    """,
+                    (now_ts, show_name, pod, pod_uid, reason, action, result, int(new_fail), int(row["id"])),
+                )
+
+                conn.commit()
+                return {
+                    "ok": True,
+                    "id": int(row["id"]),
+                    "fail_count": int(new_fail),
+                    "is_failing": int(row["is_failing"] or 0),
+                }
+
+            # insert new row
             q(
                 conn,
                 """
-                UPDATE heal_events
-                SET ts=?, deployment_name=?, pod=?, pod_uid=?, reason=?, action=?, result=?, fail_count=?
-                WHERE id=?
+                INSERT INTO heal_events
+                  (ts, namespace, deployment_uid, deployment_name, pod, pod_uid, reason, action, result, fail_count, is_failing)
+                VALUES (?,  ?,        ?,             ?,              ?,   ?,      ?,      ?,      ?,      ?,         ?)
                 """,
-                (now_ts, show_name, pod, pod_uid, reason, action, result, int(new_fail), int(row["id"])),
+                (
+                    now_ts,
+                    namespace,
+                    key_uid,
+                    show_name,
+                    pod,
+                    pod_uid,
+                    reason,
+                    action,
+                    result,
+                    int(inc),
+                    0,  # ? 按 A：事件表的 is_failing 不作为真相，默认 0（或保留原逻辑也行，但会误导）
+                ),
             )
 
             conn.commit()
+
+            cur2 = q(
+                conn,
+                "SELECT id, fail_count, is_failing FROM heal_events WHERE namespace=? AND deployment_uid=?",
+                (namespace, key_uid),
+            )
+            r2 = cur2.fetchone()
             return {
                 "ok": True,
-                "id": int(row["id"]),
-                "fail_count": int(new_fail),
-                "is_failing": int(row["is_failing"] or 0),
+                "id": int(r2["id"]),
+                "fail_count": int(r2["fail_count"]),
+                "is_failing": int(r2["is_failing"] or 0),
             }
+        finally:
+            conn.close()
 
-        # insert new row
-        q(
-            conn,
-            """
-            INSERT INTO heal_events
-              (ts, namespace, deployment_uid, deployment_name, pod, pod_uid, reason, action, result, fail_count, is_failing)
-            VALUES (?,  ?,        ?,             ?,              ?,   ?,      ?,      ?,      ?,      ?,         ?)
-            """,
-            (
-                now_ts,
-                namespace,
-                key_uid,
-                show_name,
-                pod,
-                pod_uid,
-                reason,
-                action,
-                result,
-                int(inc),
-                0,  # ✅ 按 A：事件表的 is_failing 不作为真相，默认 0（或保留原逻辑也行，但会误导）
-            ),
-        )
-
-        conn.commit()
-
-        cur2 = q(
-            conn,
-            "SELECT id, fail_count, is_failing FROM heal_events WHERE namespace=? AND deployment_uid=?",
-            (namespace, key_uid),
-        )
-        r2 = cur2.fetchone()
-        return {
-            "ok": True,
-            "id": int(r2["id"]),
-            "fail_count": int(r2["fail_count"]),
-            "is_failing": int(r2["is_failing"] or 0),
-        }
-    finally:
-        conn.close()
+    return write_with_retry(_op)

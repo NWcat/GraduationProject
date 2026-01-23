@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import FileResponse, HTMLResponse
 
 from config import settings
 from services.inspect.runner import run_inspection
 from services.ops.runtime_config import get_value
+from routers.authz import require_user, require_admin
+
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -65,7 +68,7 @@ def _rt_get_str(key: str, default: str = "") -> str:
 # endpoints
 # -------------------------
 
-@router.get("/kubeconfig")
+@router.get("/kubeconfig", dependencies=[Depends(require_admin)])
 def download_kubeconfig():
     """
     下载 kubeconfig：
@@ -87,7 +90,7 @@ def download_kubeconfig():
     )
 
 
-@router.get("/inspect")
+@router.get("/inspect", dependencies=[Depends(require_user)])
 def inspect(
     format: str = Query("json", description="json 或 html"),
     include: Optional[str] = Query(None, description="逗号分隔：prom,nodes,system,pods,events,storage,dns"),
@@ -139,7 +142,7 @@ def inspect(
     return payload
 
 
-@router.post("/inspect/run")
+@router.post("/inspect/run", dependencies=[Depends(require_user)])
 def inspect_run(
     include: Optional[str] = Query(None, description="逗号分隔：prom,nodes,system,pods,events,storage,dns"),
     per_check_timeout_seconds: int = Query(5, ge=1, le=60),
@@ -172,7 +175,7 @@ def inspect_run(
     }
 
 
-@router.get("/inspect/report/{filename}")
+@router.get("/inspect/report/{filename}", dependencies=[Depends(require_admin)])
 def download_report(filename: str):
     """
     下载巡检报告：html 或 json
@@ -180,9 +183,18 @@ def download_report(filename: str):
     /api/tools/inspect/report/{runId}.json
     """
     base = Path("data") / "reports"
-    p = base / filename
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", filename or ""):
+        raise HTTPException(status_code=400, detail="文件名非法")
+
+    base_resolved = base.resolve()
+    p = (base / filename).resolve()
+    try:
+        p.relative_to(base_resolved)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件路径非法")
+
     if not p.exists():
-        raise HTTPException(status_code=404, detail=f"report 不存在：{p}")
+        raise HTTPException(status_code=404, detail="report 不存在")
 
     if filename.endswith(".html"):
         return FileResponse(path=str(p), filename=filename, media_type="text/html; charset=utf-8")
@@ -192,7 +204,7 @@ def download_report(filename: str):
     raise HTTPException(status_code=400, detail="仅支持 .html 或 .json")
 
 
-@router.get("/diagnostics")
+@router.get("/diagnostics", dependencies=[Depends(require_user)])
 def diagnostics_compat():
     """
     兼容旧接口：直接返回巡检 JSON（默认全量 include）

@@ -36,6 +36,7 @@ export interface SuggestionsResp {
   target: Target
   key: string
   suggestions: SuggestionItem[]
+  suggestion_id?: string | null
   llm_summary?: string | null
   meta?: Record<string, unknown> | null
 }
@@ -233,6 +234,10 @@ function coerceResp(v: unknown): SuggestionsResp | null {
     suggestions: ((v as any).suggestions as unknown[])
       .map(coerceSuggestionItem)
       .filter((x): x is SuggestionItem => x !== null),
+    suggestion_id:
+      (v as any).suggestion_id === null || isString((v as any).suggestion_id)
+        ? (((v as any).suggestion_id as unknown) as string | null)
+        : null,
     llm_summary:
       (v as any).llm_summary === null || isString((v as any).llm_summary)
         ? (((v as any).llm_summary as unknown) as string | null)

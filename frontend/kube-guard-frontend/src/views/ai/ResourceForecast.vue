@@ -23,7 +23,7 @@
             <el-input v-model="nodeCpuForm.node" class="w260" placeholder="节点名，如 k3s-master" clearable />
             <el-input-number v-model="nodeCpuForm.history_minutes" :min="30" :max="10080" controls-position="right" />
             <span class="hint">历史(min)</span>
-            <el-input-number v-model="nodeCpuForm.horizon_minutes" :min="10" :max="1440" controls-position="right" />
+            <el-input-number v-model="nodeCpuForm.horizon_minutes" :min="15" :max="1440" controls-position="right" />
             <span class="hint">预测(min)</span>
             <el-input-number v-model="nodeCpuForm.step" :min="10" :max="3600" controls-position="right" />
             <span class="hint">步长(s)</span>
@@ -53,7 +53,7 @@
             <el-input v-model="nodeMemForm.node" class="w260" placeholder="节点名，如 k3s-master" clearable />
             <el-input-number v-model="nodeMemForm.history_minutes" :min="30" :max="10080" controls-position="right" />
             <span class="hint">历史(min)</span>
-            <el-input-number v-model="nodeMemForm.horizon_minutes" :min="10" :max="1440" controls-position="right" />
+            <el-input-number v-model="nodeMemForm.horizon_minutes" :min="15" :max="1440" controls-position="right" />
             <span class="hint">预测(min)</span>
             <el-input-number v-model="nodeMemForm.step" :min="10" :max="3600" controls-position="right" />
             <span class="hint">步长(s)</span>
@@ -84,7 +84,7 @@
             <el-input v-model="podCpuForm.pod" class="w300" placeholder="pod 名，如 nginx-xxx" clearable />
             <el-input-number v-model="podCpuForm.history_minutes" :min="30" :max="10080" controls-position="right" />
             <span class="hint">历史(min)</span>
-            <el-input-number v-model="podCpuForm.horizon_minutes" :min="10" :max="1440" controls-position="right" />
+            <el-input-number v-model="podCpuForm.horizon_minutes" :min="15" :max="1440" controls-position="right" />
             <span class="hint">预测(min)</span>
             <el-input-number v-model="podCpuForm.step" :min="10" :max="3600" controls-position="right" />
             <span class="hint">步长(s)</span>
@@ -121,8 +121,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { fetchCpuForecast, fetchMemForecast, fetchPodCpuForecast } from '@/api/ai'
-import type { CpuForecastResp, MemForecastResp, PodCpuForecastResp } from '@/api/ai'
+import { forecast as aiForecast, classifyAiError } from '@/api/ai_unified'
+import type { CpuForecastResp, MemForecastResp, PodCpuForecastResp } from '@/api/ai_unified'
 
 type AlertType = 'success' | 'warning' | 'error' | 'info'
 
@@ -181,6 +181,14 @@ function toSeriesForecastBand(forecast: { ts: number; yhat: number; yhat_lower: 
   const upper = forecast.map(p => [p.ts * 1000, Number(p.yhat_upper.toFixed(2))])
   const lower = forecast.map(p => [p.ts * 1000, Number(p.yhat_lower.toFixed(2))])
   return { yhat, upper, lower }
+}
+
+function warnStepAdjusted(meta?: { requested_step?: number; effective_step?: number }) {
+  const requested = meta?.requested_step
+  const effective = meta?.effective_step
+  if (typeof requested === 'number' && typeof effective === 'number' && requested !== effective) {
+    ElMessage.warning(`步长已自动提升为 ${effective}s（原 ${requested}s），以避免点数过多`)
+  }
 }
 
 function renderPercentChart(
@@ -338,15 +346,21 @@ async function loadNodeCpu() {
   if (!nodeCpuForm.value.node) return ElMessage.warning('请输入节点名')
   loading.value = true
   try {
-    const { data } = await fetchCpuForecast({ ...nodeCpuForm.value })
-    nodeCpuResp.value = data
+    const { data } = await aiForecast({ target: 'node_cpu', ...nodeCpuForm.value })
+    nodeCpuResp.value = data as CpuForecastResp
+    warnStepAdjusted(data?.meta)
 
     cpuChart = ensureChart(cpuChartRef.value!, cpuChart)
     const history = toSeriesHistoryPercent(data.history || [])
     const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
     renderPercentChart(cpuChart!, '节点 CPU 使用率（%）', history, yhat, upper, lower)
   } catch (e: any) {
-    ElMessage.error(e?.message || '节点 CPU 预测失败')
+    const err = classifyAiError(e)
+    if (err.kind === 'param' || err.kind === 'expired') {
+      ElMessage.warning(err.message || '参数错误')
+    } else {
+      ElMessage.error(err.message || '节点 CPU 预测失败')
+    }
   } finally {
     loading.value = false
   }
@@ -356,15 +370,21 @@ async function loadNodeMem() {
   if (!nodeMemForm.value.node) return ElMessage.warning('请输入节点名')
   loading.value = true
   try {
-    const { data } = await fetchMemForecast({ ...nodeMemForm.value })
-    nodeMemResp.value = data
+    const { data } = await aiForecast({ target: 'node_mem', ...nodeMemForm.value })
+    nodeMemResp.value = data as MemForecastResp
+    warnStepAdjusted(data?.meta)
 
     memChart = ensureChart(memChartRef.value!, memChart)
     const history = toSeriesHistoryPercent(data.history || [])
     const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
     renderPercentChart(memChart!, '节点内存使用率（%）', history, yhat, upper, lower)
   } catch (e: any) {
-    ElMessage.error(e?.message || '节点内存预测失败')
+    const err = classifyAiError(e)
+    if (err.kind === 'param' || err.kind === 'expired') {
+      ElMessage.warning(err.message || '参数错误')
+    } else {
+      ElMessage.error(err.message || '节点内存预测失败')
+    }
   } finally {
     loading.value = false
   }
@@ -375,8 +395,9 @@ async function loadPodCpu() {
   if (!podCpuForm.value.pod) return ElMessage.warning('请输入 pod 名')
   loading.value = true
   try {
-    const { data } = await fetchPodCpuForecast({ ...podCpuForm.value })
-    podCpuResp.value = data
+    const { data } = await aiForecast({ target: 'pod_cpu', ...podCpuForm.value })
+    podCpuResp.value = data as PodCpuForecastResp
+    warnStepAdjusted(data?.meta)
 
     podChart = ensureChart(podChartRef.value!, podChart)
     const history = (data.history || []).map(p => [p.ts * 1000, Number(p.value.toFixed(2))])
@@ -395,7 +416,12 @@ async function loadPodCpu() {
       limit
     )
   } catch (e: any) {
-    ElMessage.error(e?.message || 'Pod CPU 预测失败')
+    const err = classifyAiError(e)
+    if (err.kind === 'param' || err.kind === 'expired') {
+      ElMessage.warning(err.message || '参数错误')
+    } else {
+      ElMessage.error(err.message || 'Pod CPU 预测失败')
+    }
   } finally {
     loading.value = false
   }

@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from services.loki_client import query_logs_range
 from services.alert_client import list_alerts
 from services.prometheus_client import range_by_minutes
+from services.promql_guard import validate_promql
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 
@@ -40,6 +41,7 @@ def get_data(
 
     if type in ["metrics", "all"]:
         prom_query = metric
+        validate_promql(prom_query)
 
         # 如果 metric 本身没带 {}，才自动追加 label 过滤
         label_filters = []

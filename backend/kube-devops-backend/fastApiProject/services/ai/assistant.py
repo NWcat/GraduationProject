@@ -38,15 +38,20 @@ def assistant_chat(req: AssistantChatReq) -> AssistantChatResp:
 
     llm = DeepSeekClient()
 
-    # 不用 LLM：保底输出
-    if (not req.use_llm) or (not llm.enabled()):
+    def build_fallback_reply(extra_note: str | None = None) -> str:
         lines = ["我已生成结构化建议。"]
         if suggestions:
             for s in suggestions.suggestions[:3]:
                 lines.append(f"- [{s.severity}] {s.title}：{s.rationale}")
         if anomalies and anomalies.anomalies:
             lines.append(f"检测到异常点 {len(anomalies.anomalies)} 个（突发/偏离预测区间）。")
-        return AssistantChatResp(reply="\n".join(lines), suggestions=suggestions, anomalies=anomalies)
+        if extra_note:
+            lines.append(extra_note)
+        return "\n".join(lines)
+
+    # 不用 LLM：保底输出
+    if (not req.use_llm) or (not llm.enabled()):
+        return AssistantChatResp(reply=build_fallback_reply(), suggestions=suggestions, anomalies=anomalies)
 
     # 用 LLM：把上下文一起喂给模型
     brief = {
@@ -60,6 +65,9 @@ def assistant_chat(req: AssistantChatReq) -> AssistantChatResp:
         {"role": "system", "content": "你是云原生AIOps运维助手。回答要：简洁、可执行、分步骤。不要编造不存在的指标。"},
         {"role": "user", "content": f"用户问题：{req.message}\n\n系统上下文：{brief}"},
     ]
-    reply = llm.chat(messages, temperature=0.2)
-
-    return AssistantChatResp(reply=reply, suggestions=suggestions, anomalies=anomalies)
+    try:
+        reply = llm.chat(messages, temperature=0.2)
+        return AssistantChatResp(reply=reply, suggestions=suggestions, anomalies=anomalies)
+    except Exception:
+        fallback = build_fallback_reply("（LLM 暂不可用，已返回结构化建议）")
+        return AssistantChatResp(reply=fallback, suggestions=suggestions, anomalies=anomalies)

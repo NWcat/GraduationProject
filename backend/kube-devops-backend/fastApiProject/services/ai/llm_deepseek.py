@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 import requests
+from requests import exceptions as req_exc
+from fastapi import HTTPException
 
 from config import settings
 from services.ops.runtime_config import get_value  # ✅ DB override > settings/.env > default
@@ -75,12 +77,22 @@ class DeepSeekClient:
             "temperature": temperature,
         }
 
-        r = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        data = r.json()
-        return str(data["choices"][0]["message"]["content"]).strip()
+        t = max(1, int(timeout))
+        connect_timeout = min(3, t)
+        read_timeout = max(12, t)
+        try:
+            r = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=(connect_timeout, read_timeout),
+            )
+            r.raise_for_status()
+            data = r.json()
+            return str(data["choices"][0]["message"]["content"]).strip()
+        except req_exc.Timeout as e:
+            raise HTTPException(status_code=504, detail="LLM 请求超时") from e
+        except req_exc.HTTPError as e:
+            raise HTTPException(status_code=502, detail="LLM 返回错误") from e
+        except req_exc.RequestException as e:
+            raise HTTPException(status_code=502, detail="LLM 请求失败") from e

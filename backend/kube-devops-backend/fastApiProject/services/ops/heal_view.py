@@ -5,10 +5,21 @@ import time
 from typing import Any, Dict, List, Optional
 
 from db.sqlite import get_conn, q
+from services.ops.k8s_api import deployment_exists
 
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _clear_missing_state(namespace: str, deployment_uid: str) -> None:
+    conn = get_conn()
+    try:
+        q(conn, "DELETE FROM heal_state WHERE namespace=? AND deployment_uid=?", (namespace, deployment_uid))
+        q(conn, "DELETE FROM heal_pending WHERE namespace=? AND deployment_uid=?", (namespace, deployment_uid))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def list_heal_deployments(namespace: Optional[str] = None, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
@@ -99,8 +110,20 @@ def list_heal_deployments(namespace: Optional[str] = None, limit: int = 200, off
         rows = q(conn, sql, params).fetchall()
 
         out: List[Dict[str, Any]] = []
+        exists_cache: Dict[tuple[str, str, str], bool] = {}
         for r in rows:
             d = dict(r)
+
+            ns_val = d.get("namespace") or "default"
+            dname = d.get("deployment_name") or "unknown"
+            duid = d.get("deployment_uid") or ""
+            if dname != "unknown":
+                key = (ns_val, dname, duid)
+                if key not in exists_cache:
+                    exists_cache[key] = deployment_exists(ns_val, dname, expected_uid=duid)
+                if not exists_cache[key]:
+                    _clear_missing_state(ns_val, duid)
+                    continue
 
             is_failing = int(d.get("is_failing") or 0)
             pending = int(d.get("pending") or 0)
@@ -127,9 +150,9 @@ def list_heal_deployments(namespace: Optional[str] = None, limit: int = 200, off
 
             out.append(
                 {
-                    "namespace": d.get("namespace") or "default",
-                    "deployment_uid": d.get("deployment_uid") or "",
-                    "deployment_name": d.get("deployment_name") or "unknown",
+                    "namespace": ns_val,
+                    "deployment_uid": duid,
+                    "deployment_name": dname,
                     "status": status,
                     "fail_count": int(d.get("fail_count") or 0),
                     "is_failing": is_failing,

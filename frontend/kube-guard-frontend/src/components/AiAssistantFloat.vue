@@ -98,7 +98,7 @@ import { onBeforeUnmount, onMounted, reactive, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ChatDotRound, MagicStick, Promotion, Document } from '@element-plus/icons-vue'
 import { useAssistantStore } from '@/stores/assistant'
-import { assistantChat } from '@/api/ai'
+import { assistantChat } from '@/api/ai_unified'
 import { useAiSuggestionsStore } from '@/stores/aiSuggestions'
 import { storeToRefs } from 'pinia'
 

@@ -1,6 +1,10 @@
 # services/ops/healer.py
 from __future__ import annotations
 
+import json
+import os
+import socket
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -12,6 +16,7 @@ from services.ops.k8s_api import (
     list_pods,
     get_deployment_replicas,
     scale_deployment,
+    deployment_exists,
 )
 from services.ops.schemas import ApplyActionReq
 from services.alert_client import push_alert
@@ -20,6 +25,8 @@ from services.ops.runtime_config import get_heal_decay_config  # ✅ 新增
 from services.ops.runtime_config import get_value as rc_get_value  # ✅ 生效值：DB override > env/settings > default
 
 MAX_FAILURE_COUNT = 3  # 熔断阈值：>=3 进入熔断
+HEAL_LOCK_TTL_SEC = 120
+_DEPLOY_EXISTS_CACHE: Dict[Tuple[str, str, str], bool] = {}
 
 
 def _split_csv(s: str) -> Set[str]:
@@ -56,6 +63,90 @@ def _rc_str(key: str, default: str) -> str:
         return str(v or "")
     except Exception:
         return str(default or "")
+
+
+def _get_heal_lock_path() -> str:
+    path = str(getattr(settings, "HEAL_LOCK_FILE", "") or os.environ.get("HEAL_LOCK_FILE", "")).strip()
+    if path:
+        return path
+    return os.path.join(tempfile.gettempdir(), "kube-guard-heal.lock")
+
+
+def get_heal_lock_owner_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _read_heal_lock() -> Optional[Dict[str, Any]]:
+    path = _get_heal_lock_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def _write_heal_lock(data: Dict[str, Any]) -> None:
+    path = _get_heal_lock_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=True)
+
+
+def get_heal_lock_info() -> Optional[Dict[str, Any]]:
+    return _read_heal_lock()
+
+
+def acquire_heal_lock(owner: str, ttl_sec: int) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    path = _get_heal_lock_path()
+    now = int(time.time())
+    expire_at = now + max(1, int(ttl_sec))
+    lock_data = {"owner": str(owner), "expire_at": int(expire_at)}
+
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(lock_data, f, ensure_ascii=True)
+        return True, lock_data
+    except FileExistsError:
+        existing = _read_heal_lock()
+        if not existing:
+            try:
+                os.remove(path)
+            except Exception:
+                return False, None
+            return acquire_heal_lock(owner, ttl_sec)
+
+        existing_owner = str(existing.get("owner") or "")
+        existing_expire = int(existing.get("expire_at") or 0)
+        if existing_expire and now > existing_expire:
+            try:
+                os.remove(path)
+            except Exception:
+                return False, existing
+            return acquire_heal_lock(owner, ttl_sec)
+
+        if existing_owner == str(owner):
+            _write_heal_lock(lock_data)
+            return True, lock_data
+
+        return False, existing
+    except Exception:
+        return False, None
+
+
+def release_heal_lock(owner: str) -> None:
+    path = _get_heal_lock_path()
+    existing = _read_heal_lock()
+    if not existing:
+        return
+    if str(existing.get("owner") or "") != str(owner):
+        return
+    try:
+        os.remove(path)
+    except Exception:
+        pass
 
 
 def _load_policy_sets() -> tuple[Set[str], Set[str]]:
@@ -126,6 +217,25 @@ def _get_deploy_state(namespace: str, deployment_uid: str) -> Dict[str, Any]:
         conn.close()
 
 
+def _clear_deploy_state(namespace: str, deployment_uid: str) -> None:
+    conn = get_conn()
+    try:
+        q(conn, "DELETE FROM heal_state WHERE namespace=? AND deployment_uid=?", (namespace, deployment_uid))
+        q(conn, "DELETE FROM heal_pending WHERE namespace=? AND deployment_uid=?", (namespace, deployment_uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _deployment_exists_cached(namespace: str, deployment_name: str, deployment_uid: str) -> bool:
+    key = (namespace or "default", deployment_name or "", deployment_uid or "")
+    if key in _DEPLOY_EXISTS_CACHE:
+        return _DEPLOY_EXISTS_CACHE[key]
+    exists = deployment_exists(namespace, deployment_name, expected_uid=deployment_uid)
+    _DEPLOY_EXISTS_CACHE[key] = bool(exists)
+    return bool(exists)
+
+
 def _set_deploy_state(
     namespace: str,
     deployment_uid: str,
@@ -135,6 +245,10 @@ def _set_deploy_state(
     reason: str,
     last_replicas: Optional[int] = None,
 ) -> None:
+    if deployment_name and deployment_name != "unknown":
+        if not _deployment_exists_cached(namespace, deployment_name, deployment_uid):
+            _clear_deploy_state(namespace, deployment_uid)
+            return
     conn = get_conn()
     try:
         now = int(time.time())
@@ -223,6 +337,10 @@ def _set_pending(
     last_pod_uid: str,
     last_reason: str,
 ) -> None:
+    if deployment_name and deployment_name != "unknown":
+        if not _deployment_exists_cached(namespace, deployment_name, deployment_uid):
+            _clear_deploy_state(namespace, deployment_uid)
+            return
     conn = get_conn()
     try:
         q(
@@ -550,6 +668,18 @@ def _process_pending_heals(
         last_pod_uid = r.get("last_pod_uid") or "unknown"
         last_reason = r.get("last_reason") or ""
 
+        if dname != "unknown" and not _deployment_exists_cached(ns, dname, duid):
+            _clear_deploy_state(ns, duid)
+            details.append(
+                {
+                    "namespace": ns,
+                    "deployment_uid": duid,
+                    "deployment_name": dname,
+                    "pending": "cleared_missing",
+                }
+            )
+            continue
+
 
         bad_list = pod_index.get((ns, duid), [])
         bad = None
@@ -688,6 +818,8 @@ def run_heal_scan_once(namespace: Optional[str] = None) -> Dict[str, Any]:
     enabled = _rc_bool("HEAL_ENABLED", bool(getattr(settings, "HEAL_ENABLED", True)))
     if not enabled:
         return {"ok": False, "reason": "HEAL_ENABLED=0", "checked": 0, "healed": 0, "details": []}
+
+    _DEPLOY_EXISTS_CACHE.clear()
 
     execute = _rc_bool("HEAL_EXECUTE", bool(getattr(settings, "HEAL_EXECUTE", False)))
     max_per_cycle = _rc_int("HEAL_MAX_PER_CYCLE", int(getattr(settings, "HEAL_MAX_PER_CYCLE", 3)))

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Iterable, List, Optional, Tuple
+from datetime import datetime, timezone, timedelta
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import hashlib
 import json
+import math
 import time
 
 import pandas as pd
@@ -24,6 +25,51 @@ class ForecastConfig:
     warmup_seconds: int = 0
     prophet_growth: str = "flat"
     prophet_changepoint_prior_scale: float = 0.01
+
+
+DEFAULT_MAX_POINTS = 20000
+DEFAULT_MAX_STEP = 3600
+
+
+def get_max_points() -> int:
+    try:
+        from config import settings  # type: ignore
+
+        for key in ("AI_FORECAST_MAX_POINTS", "FORECAST_MAX_POINTS", "MAX_POINTS"):
+            v = getattr(settings, key, None)
+            if v is None:
+                continue
+            try:
+                n = int(v)
+                if n > 0:
+                    return n
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return int(DEFAULT_MAX_POINTS)
+
+
+def compute_effective_step(history_minutes: int, step: int, *, max_points: Optional[int] = None) -> int:
+    step_i = max(1, int(step))
+    max_pts = int(max_points if max_points is not None else get_max_points())
+    if max_pts <= 0:
+        return step_i
+
+    total_seconds = max(0, int(history_minutes) * 60)
+    if total_seconds <= 0:
+        return step_i
+
+    points = float(total_seconds) / float(step_i)
+    if points <= float(max_pts):
+        return step_i
+
+    new_step = int(math.ceil(float(total_seconds) / float(max_pts)))
+    if new_step < step_i:
+        new_step = step_i
+    if DEFAULT_MAX_STEP and new_step > int(DEFAULT_MAX_STEP):
+        new_step = int(DEFAULT_MAX_STEP)
+    return new_step
 
 
 def now_utc() -> datetime:
@@ -53,6 +99,56 @@ def build_cache_key(prefix: str, **kwargs: Any) -> str:
             v_str = stable_hash(v_str)
         parts.append(f"{k}={v_str}")
     return "|".join(parts)
+
+
+def build_contract_meta(
+    *,
+    target: str,
+    unit: str,
+    promql: Optional[str],
+    history_points: int,
+    forecast_points: int,
+) -> Dict[str, Any]:
+    return {
+        "target": str(target),
+        "unit": str(unit),
+        "history_points": int(history_points),
+        "forecast_points": int(forecast_points),
+        "promql": str(promql or ""),
+    }
+
+
+def build_history_series(
+    promql: str,
+    minutes: int,
+    step: int,
+    *,
+    now_fn: Callable[[], datetime] = now_utc,
+) -> List[Tuple[int, float]]:
+    effective_step = compute_effective_step(minutes, step)
+    end = now_fn()
+    start = end - timedelta(minutes=minutes)
+    return query_range_tuples(promql, start.timestamp(), end.timestamp(), effective_step)
+
+
+def build_forecast_series(
+    promql: str,
+    minutes: int,
+    horizon: int,
+    step: int,
+    config: ForecastConfig,
+    *,
+    clip_fn: Optional[Callable[[List[BandPoint]], List[BandPoint]]] = None,
+    now_fn: Callable[[], datetime] = now_utc,
+) -> Tuple[List[Tuple[int, float]], List[BandPoint], ErrorMetrics]:
+    effective_step = compute_effective_step(minutes, step)
+    history = build_history_series(promql, minutes, effective_step, now_fn=now_fn)
+    forecast, metrics = fit_predict_prophet(
+        history, horizon_minutes=horizon, step=effective_step, config=config
+    )
+    if clip_fn:
+        forecast = clip_fn(forecast)
+    return history, forecast, metrics
 
 
 def query_range_tuples(promql: str, start_ts: int, end_ts: int, step: int) -> List[Tuple[int, float]]:
@@ -115,6 +211,13 @@ def pick_instance_for_node(node: str) -> Optional[str]:
 
     try:
         rs = instant_vector(f'count by (instance) (node_uname_info{{instance=~"{node}.*"}})')
+        if rs:
+            return (rs[0].get("metric") or {}).get("instance")
+    except Exception:
+        pass
+
+    try:
+        rs = instant_vector(f'count by (instance) (node_cpu_seconds_total{{instance=~"{node}.*"}})')
         if rs:
             return (rs[0].get("metric") or {}).get("instance")
     except Exception:

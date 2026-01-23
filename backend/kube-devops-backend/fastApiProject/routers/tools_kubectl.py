@@ -7,10 +7,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 
 from config import settings
+from routers.authz import require_user, require_admin
 
 
 router = APIRouter(prefix="/api/tools/k8s", tags=["tools-k8s"])
@@ -212,7 +213,7 @@ def _sa_namespace() -> Optional[str]:
 # -----------------------------
 # Python-client endpoints
 # -----------------------------
-@router.get("/whoami")
+@router.get("/whoami", dependencies=[Depends(require_user)])
 def whoami():
     """
     返回当前连接模式、kubeconfig、以及 in-cluster namespace（若存在）。
@@ -244,7 +245,7 @@ def whoami():
     }
 
 
-@router.get("/pods")
+@router.get("/pods", dependencies=[Depends(require_user)])
 def list_pods(namespace: Optional[str] = Query(None), limit: int = Query(200, ge=1, le=2000)):
     v1 = _core()
     items = []
@@ -296,7 +297,7 @@ def list_pods(namespace: Optional[str] = Query(None), limit: int = Query(200, ge
     return {"ok": True, "count": len(items), "items": items}
 
 
-@router.get("/nodes")
+@router.get("/nodes", dependencies=[Depends(require_user)])
 def list_nodes(limit: int = Query(200, ge=1, le=2000)):
     v1 = _core()
     out = []
@@ -324,7 +325,7 @@ def list_nodes(limit: int = Query(200, ge=1, le=2000)):
     return {"ok": True, "count": len(out), "items": out}
 
 
-@router.get("/describe/pod")
+@router.get("/describe/pod", dependencies=[Depends(require_user)])
 def describe_pod(namespace: str = Query(...), name: str = Query(...)):
     v1 = _core()
     try:
@@ -356,7 +357,7 @@ def describe_pod(namespace: str = Query(...), name: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/logs/pod")
+@router.get("/logs/pod", dependencies=[Depends(require_user)])
 def pod_logs(
     namespace: str = Query(...),
     name: str = Query(...),
@@ -379,7 +380,7 @@ def pod_logs(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/top/pod")
+@router.get("/top/pod", dependencies=[Depends(require_user)])
 def top_pod(namespace: str = Query(...), name: str = Query(...)):
     """
     通过 metrics.k8s.io 读取 Pod metrics（需要集群装 metrics-server）。
@@ -461,7 +462,7 @@ def _build_kubectl_env_and_base(kubectl: str) -> tuple[List[str], Dict[str, str]
     raise HTTPException(status_code=500, detail="KUBECONFIG_PATH 未配置（且未启用 incluster）")
 
 
-@router.post("/kubectl/exec", response_model=KubectlExecOut)
+@router.post("/kubectl/exec", response_model=KubectlExecOut, dependencies=[Depends(require_admin)])
 def kubectl_exec(payload: KubectlExecIn):
     """
     只读 kubectl 工具箱：get/describe/logs/top

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable
 
 DB_PATH = Path("data")
 DB_PATH.mkdir(exist_ok=True)
@@ -12,7 +13,9 @@ DB_FILE = DB_PATH / "app.db"
 
 def get_conn() -> sqlite3.Connection:
     """获取数据库连接"""
-    conn = sqlite3.connect(DB_FILE.as_posix(), check_same_thread=False)
+    conn = sqlite3.connect(DB_FILE.as_posix(), check_same_thread=False, timeout=5.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -29,6 +32,21 @@ def qmany(conn: sqlite3.Connection, sql: str, rows: Iterable[Iterable[Any]]):
     cur = conn.cursor()
     cur.executemany(sql, [tuple(r) for r in rows])
     return cur
+
+
+def write_with_retry(op: Callable[[], Any]) -> Any:
+    """写入重试：最多 3 次，退避 50/100/200ms"""
+    backoffs = [0.05, 0.1, 0.2]
+    for i in range(len(backoffs) + 1):
+        try:
+            return op()
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" not in msg and "busy" not in msg:
+                raise
+            if i >= len(backoffs):
+                raise
+            time.sleep(backoffs[i])
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
@@ -190,6 +208,56 @@ def init_db() -> None:
                 q(conn, "ALTER TABLE clusters ADD COLUMN is_active INTEGER DEFAULT 0;", ())
             if "provider" not in c:
                 q(conn, "ALTER TABLE clusters ADD COLUMN provider TEXT DEFAULT '';", ())
+
+        # 8) ai_feedback
+        if not _has_table(conn, "ai_feedback"):
+            q(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS ai_feedback(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    target TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    suggestion_id TEXT DEFAULT '',
+                    action_kind TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    detail TEXT DEFAULT ''
+                );
+                """,
+            )
+
+        # 9) ai_evolution
+        if not _has_table(conn, "ai_evolution"):
+            q(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS ai_evolution(
+                    target TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    observe_ratio REAL NOT NULL,
+                    trigger_ratio REAL NOT NULL,
+                    sustain_minutes INTEGER NOT NULL,
+                    updated_ts INTEGER NOT NULL,
+                    PRIMARY KEY(target, key)
+                );
+                """,
+            )
+
+        # 10) ai_suggestion_state
+        if not _has_table(conn, "ai_suggestion_state"):
+            q(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS ai_suggestion_state(
+                    user TEXT NOT NULL,
+                    row_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_ts INTEGER NOT NULL,
+                    PRIMARY KEY(user, row_key)
+                );
+                """,
+            )
 
         conn.commit()
     finally:

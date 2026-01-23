@@ -1,10 +1,12 @@
 # /routers/logs.py
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from services.loki_client import query_logs_range, query_logs_instant
+from routers.authz import require_user
 
 router = APIRouter(prefix="/logs", tags=["Logs"])
 
-@router.get("/instant")
+
+@router.get("/instant", dependencies=[Depends(require_user)])
 def logs_instant(
     query: str = Query('{job=~".+"}'),
     limit: int = Query(50),
@@ -13,7 +15,7 @@ def logs_instant(
 ):
     return {"status": "success", "data": query_logs_instant(query, limit, time, direction)}
 
-@router.get("/range")
+@router.get("/range", dependencies=[Depends(require_user)])
 def logs_range(
     query: str = Query('{job=~".+"}'),
     minutes: int = Query(60),

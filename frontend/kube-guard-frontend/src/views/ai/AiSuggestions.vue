@@ -111,6 +111,10 @@
           :description="ruleConclusionText"
         />
 
+        <div v-if="resp?.suggestion_id && !resp.llm_summary" class="mt12">
+          <el-button size="small" :loading="summaryLoading" @click="fetchSummary">获取总结</el-button>
+        </div>
+
         <el-alert
           v-if="resp.llm_summary"
           class="mt12"
@@ -121,7 +125,15 @@
           :description="resp.llm_summary"
         />
 
-        <el-table v-if="resp.suggestions.length" class="mt12" :data="resp.suggestions" size="small" border>
+        <el-table
+          v-if="resp.suggestions.length"
+          class="mt12"
+          :data="visibleSuggestions"
+          :row-key="(row) => normalizeSuggestionKey(resp, resp.suggestions.indexOf(row), row)"
+          :row-class-name="suggestionRowClass"
+          size="small"
+          border
+        >
           <el-table-column label="Severity" width="120">
             <template #default="{ row }">
               <el-tag :type="severityTagType(row.severity)">{{ row.severity }}</el-tag>
@@ -167,13 +179,16 @@
                 type="primary"
                 :loading="applyLoading"
                 :disabled="!isExecutableKind(row.action.kind)"
-                @click="openExecuteDialog(row, $index)"
+                @click="openExecuteDialog(row, resolveRowIndex(row))"
               >
                 一键执行
               </el-button>
 
               <el-button size="small" type="success" plain @click="explain(row)">
                 解释
+              </el-button>
+              <el-button size="small" type="info" plain @click="onIgnore(row)">
+                忽略 / 已读
               </el-button>
             </template>
           </el-table-column>
@@ -239,7 +254,14 @@
             :description="h.resp.llm_summary"
           />
 
-          <el-table v-if="h.resp.suggestions.length" class="mt12" :data="h.resp.suggestions" size="small" border>
+          <el-table
+            v-if="h.resp.suggestions.length"
+            class="mt12"
+            :data="h.resp.suggestions"
+            :row-key="(row) => normalizeSuggestionKey(h.resp, h.resp.suggestions.indexOf(row), row)"
+            size="small"
+            border
+          >
             <el-table-column label="Severity" width="120">
               <template #default="{ row }">
                 <el-tag :type="severityTagType(row.severity)">{{ row.severity }}</el-tag>
@@ -459,7 +481,18 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
-import { fetchSuggestions, executeSuggestion, assistantChat } from '@/api/ai'
+import {
+  suggestions as aiSuggestions,
+  execute as aiExecute,
+  suggestionSummary as aiSummary,
+  feedback as aiFeedback,
+  markSuggestionState,
+  fetchSuggestionStates,
+  normalizeSuggestionKey,
+  explainAiHttpError,
+  type SuggestionState
+} from '@/api/ai_unified'
+import { assistantChat } from '@/api/ai_unified'
 import { useAssistantStore } from '@/stores/assistant'
 import { storeToRefs } from 'pinia'
 import { useAiSuggestionsStore } from '@/stores/aiSuggestions'
@@ -496,6 +529,7 @@ interface SuggestionsResp {
   target: Target
   key: string
   suggestions: SuggestionItem[]
+  suggestion_id?: string | null
   llm_summary?: string | null
   meta?: Record<string, unknown> | null
 }
@@ -526,10 +560,21 @@ const tuneMemLimMb = ref<number | null>(null)
 const assistantStore = useAssistantStore()
 
 const loading = ref(false)
+const summaryLoading = ref(false)
 const applyLoading = ref(false)
 
 const sugStore = useAiSuggestionsStore()
 const { form, resp, history } = storeToRefs(sugStore)
+const rowStates = ref<Record<string, SuggestionState>>({})
+
+const visibleSuggestions = computed(() => {
+  const r = resp.value
+  if (!r) return []
+  return r.suggestions.filter((item, index) => {
+    const rowKey = normalizeSuggestionKey(r, index, item)
+    return rowStates.value[rowKey] !== 'ignored'
+  })
+})
 
 /** ✅ 历史折叠默认打开最新一条 */
 const openedHistory = ref<string[]>([])
@@ -597,6 +642,60 @@ function parseNsName(s: unknown): { ns: string; name: string } {
   const raw = String(s ?? '')
   const [ns = '', name = ''] = raw.split('/')
   return { ns, name }
+}
+
+function getWorkloadKind(evidence: Record<string, unknown>): string {
+  return typeof (evidence as any).workload_kind === 'string' ? String((evidence as any).workload_kind) : ''
+}
+
+function getControllerKind(evidence: Record<string, unknown>): string {
+  return typeof (evidence as any).controller_kind === 'string' ? String((evidence as any).controller_kind) : ''
+}
+
+function isBarePod(evidence: Record<string, unknown>): boolean {
+  const wk = getWorkloadKind(evidence).trim()
+  const ck = getControllerKind(evidence).trim()
+  const wkUnknown = wk === '' || wk === 'Unknown' || wk === 'None'
+  const ckUnknown = ck === '' || ck === 'Unknown' || ck === 'None'
+  return wkUnknown && ckUnknown
+}
+
+function isControllerExecutable(evidence: Record<string, unknown>): boolean {
+  const wk = getWorkloadKind(evidence).trim()
+  return wk === 'Deployment' || isBarePod(evidence)
+}
+
+function getRowKeyFromResp(r: SuggestionsResp, row: SuggestionItem): string {
+  const index = r.suggestions.indexOf(row)
+  if (index < 0) return ''
+  return normalizeSuggestionKey(r, index, row)
+}
+
+function resolveRowIndex(row: SuggestionItem): number {
+  const r = resp.value
+  if (!r) return -1
+  return r.suggestions.indexOf(row)
+}
+
+function suggestionRowClass({ row }: { row: SuggestionItem }): string {
+  const r = resp.value
+  if (!r) return ''
+  const rowKey = getRowKeyFromResp(r, row)
+  if (!rowKey) return ''
+  return rowStates.value[rowKey] === 'read' ? 'row-read' : ''
+}
+
+async function syncSuggestionStates(r: SuggestionsResp): Promise<void> {
+  const rowKeys = r.suggestions.map((item, index) => normalizeSuggestionKey(r, index, item))
+  rowStates.value = {}
+  if (!rowKeys.length) return
+  try {
+    const { data } = await fetchSuggestionStates(rowKeys)
+    rowStates.value = data?.states ? { ...data.states } : {}
+  } catch (e: unknown) {
+    const message = explainAiHttpError(e)
+    if (message) ElMessage.error(message)
+  }
 }
 
 function pickDeploymentFromEvidence(evidence: Record<string, unknown>): { ns: string; name: string } {
@@ -688,20 +787,12 @@ function formatTs(ts: number): string {
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
-function toErrorMessage(e: unknown, fallback: string): string {
-  if (isObject(e) && isObject((e as any).response) && isObject((e as any).response.data)) {
-    const detail = (e as any).response.data.detail
-    if (typeof detail === 'string') return detail
-  }
-  if (e instanceof Error) return e.message
-  return fallback
-}
-
 /** =========================
  * Actions
  * ========================= */
 function reset(): void {
   sugStore.reset()
+  rowStates.value = {}
   ElMessage.success('已重置')
 }
 
@@ -730,18 +821,37 @@ async function run(): Promise<void> {
       params.threshold = form.value.threshold
     }
 
-    const { data } = await fetchSuggestions(params as any)
+    const { data } = await aiSuggestions(params as any)
     const normalized = normalizeSuggestionsResp(data)
 
     sugStore.pushHistory(normalized)
     openedHistory.value = history.value[0]?.id ? [history.value[0].id] : []
 
     assistantStore.setLastSuggestions(normalized as any)
+    await syncSuggestionStates(normalized)
     ElMessage.success('已生成建议')
   } catch (e: unknown) {
-    ElMessage.error(toErrorMessage(e, '生成建议失败'))
+    const message = explainAiHttpError(e)
+    if (message) ElMessage.error(message)
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchSummary(): Promise<void> {
+  if (!resp.value?.suggestion_id) {
+    ElMessage.warning('请先生成建议')
+    return
+  }
+  summaryLoading.value = true
+  try {
+    const { data } = await aiSummary({ suggestion_id: resp.value.suggestion_id })
+    if (resp.value) resp.value.llm_summary = data.llm_summary
+  } catch (e: unknown) {
+    const message = explainAiHttpError(e)
+    if (message) ElMessage.error(message)
+  } finally {
+    summaryLoading.value = false
   }
 }
 
@@ -775,11 +885,13 @@ async function clearAllHistory(): Promise<void> {
  * ========================= */
 function normalizeSuggestionsResp(input: unknown): SuggestionsResp {
   if (!isObject(input)) {
-    return { target: 'node_cpu', key: '-', suggestions: [], llm_summary: null, meta: null }
+    return { target: 'node_cpu', key: '-', suggestions: [], suggestion_id: null, llm_summary: null, meta: null }
   }
 
   const target = (typeof (input as any).target === 'string' ? (input as any).target : 'node_cpu') as Target
   const key = typeof (input as any).key === 'string' ? (input as any).key : '-'
+  const suggestion_id =
+    typeof (input as any).suggestion_id === 'string' ? (input as any).suggestion_id : null
   const llm_summary = typeof (input as any).llm_summary === 'string' ? (input as any).llm_summary : null
   const meta = isObject((input as any).meta) ? ((input as any).meta as Record<string, unknown>) : null
 
@@ -788,7 +900,7 @@ function normalizeSuggestionsResp(input: unknown): SuggestionsResp {
     .map((x: unknown) => toSuggestionItem(x))
     .filter((x: SuggestionItem | null): x is SuggestionItem => x !== null)
 
-  return { target, key, suggestions, llm_summary, meta }
+  return { target, key, suggestions, suggestion_id, llm_summary, meta }
 }
 
 function toSuggestionItem(x: unknown): SuggestionItem | null {
@@ -891,6 +1003,14 @@ function openExecuteDialog(row: SuggestionItem, index: number) {
     ElMessage.warning(`该建议不可执行：${kind}`)
     return
   }
+  if (!isControllerExecutable(row.evidence || {})) {
+    ElMessage.warning('不支持该控制器一键执行')
+    return
+  }
+  if (index < 0) {
+    ElMessage.warning('建议索引无效')
+    return
+  }
 
   execIndex.value = index
   execKind.value = kind as ActionKind
@@ -976,6 +1096,7 @@ async function doExecute(): Promise<void> {
     step: form.value.step,
     sustain_minutes: form.value.sustain_minutes,
     threshold: form.value.threshold,
+    suggestion_id: r.suggestion_id || undefined,
   }
 
   if (r.target === 'pod_cpu') {
@@ -1010,13 +1131,69 @@ async function doExecute(): Promise<void> {
 
   applyLoading.value = true
   try {
-    const { data } = await executeSuggestion(params)
+    const { data } = await aiExecute(params)
     ElMessage.success(data.detail || '已执行')
     execOpen.value = false
+    await postFeedback('success')
   } catch (e: unknown) {
-    ElMessage.error(toErrorMessage(e, '执行失败'))
+    const message = explainAiHttpError(e) || '执行失败'
+    if (message) ElMessage.error(message)
+    await postFeedback('fail', message)
   } finally {
     applyLoading.value = false
+  }
+}
+
+async function onIgnore(row: SuggestionItem): Promise<void> {
+  const r = resp.value
+  if (!r) return
+  const rowKey = getRowKeyFromResp(r, row)
+  if (!rowKey) return
+  let status: SuggestionState | null = null
+  try {
+    await ElMessageBox.confirm('选择处理方式', '标记建议', {
+      type: 'warning',
+      confirmButtonText: '忽略',
+      cancelButtonText: '已读',
+      distinguishCancelAndClose: true
+    })
+    status = 'ignored'
+  } catch (action) {
+    if (action === 'cancel') {
+      status = 'read'
+    } else {
+      return
+    }
+  }
+  if (!status) return
+  try {
+    await markSuggestionState(rowKey, status)
+    rowStates.value[rowKey] = status
+    if (status === 'ignored') {
+      ElMessage.success('已忽略该建议')
+    } else {
+      ElMessage.success('已标记为已读')
+    }
+  } catch (e) {
+    const message = explainAiHttpError(e)
+    if (message) ElMessage.error(message)
+  }
+}
+
+async function postFeedback(outcome: 'success' | 'fail' | 'ignored', detail?: string): Promise<void> {
+  const r = resp.value
+  if (!r) return
+  try {
+    await aiFeedback({
+      target: r.target,
+      key: r.key,
+      action_kind: execKind.value,
+      outcome,
+      detail,
+      suggestion_id: r.suggestion_id ?? undefined
+    })
+  } catch (e) {
+    console.warn('feedback failed', e)
   }
 }
 
@@ -1080,7 +1257,8 @@ async function explain(row: SuggestionItem): Promise<void> {
 
     explainText.value = typeof (data as any)?.reply === 'string' ? (data as any).reply : '（大模型未返回内容）'
   } catch (e: unknown) {
-    explainText.value = toErrorMessage(e, '解释失败（请先接通 deepseek 代理接口）')
+    const message = explainAiHttpError(e) || '解释失败（请先接通 deepseek 代理接口）'
+    explainText.value = message
   }
 }
 </script>
@@ -1433,6 +1611,15 @@ async function explain(row: SuggestionItem): Promise<void> {
 
 .kv b {
   color: #111827;
+}
+
+/* 建议已读状态 */
+.row-read td {
+  color: #9ca3af;
+}
+
+.row-read .el-tag {
+  opacity: 0.6;
 }
 
 /* 小分割与间距 */

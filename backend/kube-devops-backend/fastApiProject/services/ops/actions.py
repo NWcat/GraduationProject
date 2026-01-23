@@ -59,6 +59,20 @@ def _build_mem_value_from_mb(mb: Optional[float]) -> Optional[str]:
     return f"{m}Mi"
 
 
+def _ensure_deployment_target(action: str, req: ApplyActionReq) -> None:
+    name = req.target.get("name")
+    if not name:
+        raise ValueError("only Deployment is supported")
+    kind = req.target.get("kind") or req.target.get("workload_kind") or req.params.get("workload_kind")
+    if kind:
+        if str(kind).strip().lower() != "deployment":
+            raise ValueError("only Deployment is supported")
+    scope = req.params.get("scope")
+    if scope:
+        if str(scope).strip().lower() != "deployment":
+            raise ValueError("only Deployment is supported")
+
+
 def apply_action(req: ApplyActionReq) -> ApplyActionResp:
     action = (req.action or "").upper()
     dry = bool(req.dry_run)
@@ -67,8 +81,7 @@ def apply_action(req: ApplyActionReq) -> ApplyActionResp:
     name = req.target.get("name")  # deployment name for scale/restart/tune
 
     if action == "SCALE_DEPLOYMENT":
-        if not name:
-            raise ValueError("target.name (deployment) is required for SCALE_DEPLOYMENT")
+        _ensure_deployment_target(action, req)
 
         before = get_deployment_replicas(namespace=ns, name=name)
 
@@ -124,8 +137,7 @@ def apply_action(req: ApplyActionReq) -> ApplyActionResp:
 
     # ✅ 新增：调整 Deployment 资源（requests/limits）
     if action in ("TUNE_REQUESTS_LIMITS",):
-        if not name:
-            raise ValueError("target.name (deployment) is required for TUNE_REQUESTS_LIMITS")
+        _ensure_deployment_target(action, req)
 
         # 兼容 params 命名：cpu_request_m / cpu_limit_m / mem_request_mb / mem_limit_mb
         # 也兼容 cpu_request_mcpu / cpu_limit_mcpu / mem_request_mib / mem_limit_mib 等

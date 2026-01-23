@@ -30,6 +30,7 @@ class CpuHistoryResp(BaseModel):
     minutes: int
     step: int
     series: List[TsPoint]
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CpuForecastResp(BaseModel):
@@ -40,7 +41,7 @@ class CpuForecastResp(BaseModel):
     history: List[TsPoint]
     forecast: List[BandPoint]
     metrics: ErrorMetrics
-    meta: Dict[str, Any] = {}
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 # === append to services/ai/schemas.py ===
@@ -52,7 +53,7 @@ class MemHistoryResp(BaseModel):
     minutes: int
     step: int
     series: List[TsPoint]
-    meta: Dict[str, Any] = {}
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class MemForecastResp(BaseModel):
@@ -63,7 +64,7 @@ class MemForecastResp(BaseModel):
     history: List[TsPoint]
     forecast: List[BandPoint]
     metrics: ErrorMetrics
-    meta: Dict[str, Any] = {}
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PodCpuHistoryResp(BaseModel):
@@ -72,7 +73,7 @@ class PodCpuHistoryResp(BaseModel):
     minutes: int
     step: int
     series: List[TsPoint]
-    meta: Dict[str, Any] = {}
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PodCpuForecastResp(BaseModel):
@@ -84,7 +85,7 @@ class PodCpuForecastResp(BaseModel):
     history: List[TsPoint]
     forecast: List[BandPoint]
     metrics: ErrorMetrics
-    meta: Dict[str, Any] = {}
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AnomalyPoint(BaseModel):
@@ -137,6 +138,7 @@ class SuggestionsResp(BaseModel):
     target: Literal["node_cpu", "node_mem", "pod_cpu"]
     key: str
     suggestions: List[SuggestionItem]
+    suggestion_id: Optional[str] = None
     llm_summary: Optional[str] = None
     meta: Optional[Dict[str, Any]] = None
 
@@ -153,3 +155,35 @@ class AssistantChatResp(BaseModel):
     suggestions: Optional[SuggestionsResp] = None
     anomalies: Optional[AnomalyResp] = None
     meta: Optional[Dict[str, Any]] = None
+
+
+class FeedbackReq(BaseModel):
+    target: Literal["node_cpu", "node_mem", "pod_cpu"]
+    key: str
+    action_kind: str
+    outcome: Literal["success", "fail", "ignored"]
+    detail: Optional[str] = None
+    suggestion_id: Optional[str] = None
+    ts: Optional[int] = None
+
+
+class EvolutionParams(BaseModel):
+    observe_ratio: float
+    trigger_ratio: float
+    critical_ratio: float
+    sustain_minutes: int
+
+
+class EvolutionResp(BaseModel):
+    target: str
+    key: str
+    enabled: bool
+    params: EvolutionParams
+    source: str
+
+
+class FeedbackResp(BaseModel):
+    ok: bool
+    feedback_id: Optional[int] = None
+    evolved: bool = False
+    evolution: Optional[EvolutionResp] = None

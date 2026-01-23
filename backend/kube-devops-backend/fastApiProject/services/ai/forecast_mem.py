@@ -2,15 +2,21 @@
 from __future__ import annotations
 
 from typing import List, Optional, Tuple, Dict, Any
-from datetime import datetime, timezone, timedelta
 
 from config import settings
 from services.ops.runtime_config import get_value  # ✅DB override > settings/.env > default
 
 from services.ai.cache import ai_cache
 from services.ai.schemas import TsPoint, BandPoint, MemHistoryResp, MemForecastResp, ErrorMetrics
-from services.ai.forecast_core import ForecastConfig, query_range_tuples, fit_predict_prophet, clip_range, stable_hash
-from services.prometheus_client import instant_vector
+from services.ai.forecast_core import (
+    ForecastConfig,
+    clip_range,
+    stable_hash,
+    build_contract_meta,
+    build_history_series,
+    build_forecast_series,
+    require_instance_for_node,
+)
 
 
 MEM_CONFIG = ForecastConfig(
@@ -21,10 +27,6 @@ MEM_CONFIG = ForecastConfig(
     prophet_growth="linear",
     prophet_changepoint_prior_scale=0.05,
 )
-
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _cfg_str(key: str, default: str) -> str:
@@ -59,52 +61,12 @@ def _prom_base() -> str:
     return str(base).rstrip("/")
 
 
-def _query_instant(promql: str) -> List[Dict[str, Any]]:
-    return instant_vector(promql) or []
-
-
-def _pick_instance_for_node(node: str) -> Optional[str]:
-    """
-    跟 forecast_cpu.py 一致：
-    0) node 里含 : -> 直接当 instance
-    1) node_uname_info{nodename="..."} -> instance 精确映射
-    2) 兜底：instance=~"{node}.*"
-
-    ❌不再“随便取一个 instance”
-    """
-    if ":" in node:
-        return node
-
-    # ✅1) 最稳：nodename 精确映射
-    try:
-        rs = _query_instant(f'count by (instance) (node_uname_info{{nodename="{node}"}})')
-        if rs:
-            return rs[0].get("metric", {}).get("instance")
-    except Exception:
-        pass
-
-    # 2) 兜底：instance 本身包含 node 名
-    try:
-        rs = _query_instant(f'count by (instance) (node_uname_info{{instance=~"{node}.*"}})')
-        if rs:
-            return rs[0].get("metric", {}).get("instance")
-    except Exception:
-        pass
-
-    return None
-
-
 def _default_node_mem_promql(node: str) -> Tuple[str, str]:
     """
     节点内存使用率 = (1 - MemAvailable/MemTotal) * 100
     强制解析 instance，否则报错。
     """
-    inst = _pick_instance_for_node(node)
-    if not inst:
-        raise RuntimeError(
-            f'cannot resolve node "{node}" to Prometheus instance. '
-            f'Please check node_uname_info{{nodename="{node}"}} exists in Prometheus.'
-        )
+    inst = require_instance_for_node(node)
 
     q = (
         f'(1 - (avg by (instance) (node_memory_MemAvailable_bytes{{instance="{inst}"}})'
@@ -124,21 +86,28 @@ def get_mem_history(node: str, minutes: int, step: int, promql: Optional[str] = 
     else:
         q, resolved_instance = _default_node_mem_promql(node)
 
-    end = _now_utc()
-    start = end - timedelta(minutes=minutes)
-    points = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
+    points = build_history_series(q, minutes, step)
     series = [TsPoint(ts=t, value=v) for (t, v) in points]
+    base_meta = build_contract_meta(
+        target="node_mem",
+        unit="%",
+        promql=q,
+        history_points=len(series),
+        forecast_points=0,
+    )
+    base_meta.update(
+        {
+            "prom_base": _prom_base(),
+            "resolved_instance": resolved_instance,
+            "points": len(series),
+        }
+    )
     return MemHistoryResp(
         node=node,
         minutes=minutes,
         step=step,
         series=series,
-        meta={
-            "promql": q,
-            "prom_base": _prom_base(),
-            "resolved_instance": resolved_instance,
-            "points": len(series),
-        },
+        meta=base_meta,
     )
 
 
@@ -162,13 +131,15 @@ def get_mem_forecast(
     if cached:
         return cached
 
-    end = _now_utc()
-    start = end - timedelta(minutes=minutes)
-    history = query_range_tuples(q, start.timestamp(), end.timestamp(), step)
-
+    history, forecast_series, metrics = build_forecast_series(
+        q,
+        minutes,
+        horizon,
+        step,
+        MEM_CONFIG,
+        clip_fn=_clip_percent,
+    )
     history_series = [TsPoint(ts=t, value=v) for (t, v) in history]
-    forecast_series, metrics = fit_predict_prophet(history, horizon_minutes=horizon, step=step, config=MEM_CONFIG)
-    forecast_series = _clip_percent(forecast_series)
 
     resp = MemForecastResp(
         node=node,
@@ -179,11 +150,15 @@ def get_mem_forecast(
         forecast=forecast_series,
         metrics=metrics,
         meta={
-            "promql": q,
+            **build_contract_meta(
+                target="node_mem",
+                unit="%",
+                promql=q,
+                history_points=len(history_series),
+                forecast_points=len(forecast_series),
+            ),
             "prom_base": _prom_base(),
             "resolved_instance": resolved_instance,
-            "history_points": len(history_series),
-            "forecast_points": len(forecast_series),
         },
     )
     ai_cache.set(cache_key, resp, ttl=cache_ttl)
