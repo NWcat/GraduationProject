@@ -20,9 +20,10 @@
       </div>
 
       <el-table :data="filtered" size="small" border>
-        <el-table-column prop="k" label="Key" min-width="220" />
-        <el-table-column prop="desc" label="说明" min-width="260" />
+        <el-table-column prop="k" label="Key" min-width="240" />
+        <el-table-column prop="desc" label="说明" min-width="320" />
         <el-table-column prop="type" label="类型" width="90" />
+
         <el-table-column label="来源" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="row.source === 'db' ? 'warning' : 'info'">
@@ -31,7 +32,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="当前值" min-width="260">
+        <el-table-column label="当前值" min-width="360">
           <template #default="{ row }">
             <!-- secret：不回显，输入新值才会改 -->
             <template v-if="row.secret">
@@ -51,9 +52,29 @@
               </div>
             </template>
 
-            <!-- bool：用 switch -->
+            <!-- bool：统一用 switch（关键：toBool + 回写 boolean） -->
             <template v-else-if="row.type === 'bool'">
-              <el-switch v-model="draft[row.k]" />
+              <el-tooltip
+                v-if="row.k === PROMQL_FREE_KEY"
+                content="开启后允许任意 PromQL（仍受时间范围/step/points 限制）；关闭则启用白名单校验"
+                placement="top"
+              >
+                <el-switch
+                  :model-value="toBool(draft[row.k])"
+                  :disabled="loading || saving"
+                  inline-prompt
+                  active-text="开启"
+                  inactive-text="关闭"
+                  @update:model-value="(v:boolean) => (draft[row.k] = v)"
+                />
+              </el-tooltip>
+
+              <el-switch
+                v-else
+                :model-value="toBool(draft[row.k])"
+                :disabled="loading || saving"
+                @update:model-value="(v:boolean) => (draft[row.k] = v)"
+              />
             </template>
 
             <!-- choices：下拉 -->
@@ -91,9 +112,7 @@
         </el-table-column>
       </el-table>
 
-      <div class="foot muted">
-        提示：secret 不会回显明文；要更新请在“当前值”输入新 secret 后保存。
-      </div>
+      <div class="foot muted">提示：secret 不会回显明文；要更新请在“当前值”输入新 secret 后保存。</div>
     </el-card>
   </div>
 </template>
@@ -113,10 +132,22 @@ const items = ref<ConfigItem[]>([])
 const draft = reactive<Record<string, any>>({})
 const baseline = reactive<Record<string, any>>({})
 
+const PROMQL_FREE_KEY = 'PROMQL_FREE_ENABLED'
+
+function toBool(v: any): boolean {
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v !== 0
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    if (s === '1' || s === 'true' || s === 'yes' || s === 'y' || s === 'on') return true
+    if (s === '0' || s === 'false' || s === 'no' || s === 'n' || s === 'off' || s === '') return false
+  }
+  return false
+}
+
 function normalizeRowValue(row: ConfigItem) {
-  // secret：baseline 用占位符/空来判断是否改动（但真正提交时：有输入才提交）
   if (row.secret) return row.value || ''
-  // bool/int/float/str：row.value 已经是后端生效值（可能是 number/bool）
+  if (row.type === 'bool') return toBool(row.value)
   return row.value
 }
 
@@ -127,11 +158,9 @@ async function load() {
     const list: ConfigItem[] = resp?.data?.items || []
     items.value = list
 
-    // 初始化 draft + baseline
     for (const row of list) {
       const v = normalizeRowValue(row)
       baseline[row.k] = v
-      // secret：默认不给 draft 值（避免误提交占位符）
       draft[row.k] = row.secret ? '' : v
     }
   } catch (e: any) {
@@ -143,8 +172,10 @@ async function load() {
 
 function isChanged(row: ConfigItem) {
   if (row.secret) {
-    // secret：只要用户输入了新值，就算改动
     return !!(draft[row.k] && String(draft[row.k]).trim())
+  }
+  if (row.type === 'bool') {
+    return toBool(draft[row.k]) !== toBool(baseline[row.k])
   }
   return draft[row.k] !== baseline[row.k]
 }
@@ -162,16 +193,22 @@ const filtered = computed(() => {
 })
 
 async function saveAll() {
-  // 只提交“有变化”的项
   const payload: Record<string, any> = {}
+
   for (const row of items.value) {
     if (!isChanged(row)) continue
+
     if (row.secret) {
-      // secret：只在有输入时提交
       payload[row.k] = String(draft[row.k]).trim()
-    } else {
-      payload[row.k] = draft[row.k]
+      continue
     }
+
+    if (row.type === 'bool') {
+      payload[row.k] = toBool(draft[row.k]) // ✅ 强制提交 boolean
+      continue
+    }
+
+    payload[row.k] = draft[row.k]
   }
 
   if (Object.keys(payload).length === 0) {
@@ -197,11 +234,9 @@ async function saveAll() {
 }
 
 async function resetOne(row: ConfigItem) {
-  const confirm = await ElMessageBox.confirm(
-    `确定将 ${row.k} 恢复默认吗？（会删除 DB 覆盖）`,
-    '恢复默认',
-    { type: 'warning' }
-  ).catch(() => false)
+  const confirm = await ElMessageBox.confirm(`确定将 ${row.k} 恢复默认吗？（会删除 DB 覆盖）`, '恢复默认', {
+    type: 'warning',
+  }).catch(() => false)
 
   if (!confirm) return
 
@@ -220,15 +255,21 @@ load()
 <style scoped>
 .page { padding: 6px 0; }
 .page-head {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 12px; margin-bottom: 12px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 .page-title { font-size: 18px; font-weight: 800; }
 .page-subtitle { font-size: 12px; color: #64748b; margin-top: 6px; }
 .actions { display: flex; gap: 8px; }
 .card { border-radius: 14px; }
 .toolbar {
-  display: flex; gap: 12px; align-items: center; margin-bottom: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
 }
 .w320 { width: 320px; }
 .w240 { width: 240px; }

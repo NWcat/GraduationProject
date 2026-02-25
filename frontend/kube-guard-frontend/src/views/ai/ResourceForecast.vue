@@ -1,4 +1,3 @@
-<!-- src/views/ai/CpuForecast.vue -->
 <template>
   <div class="page">
     <div class="page-head">
@@ -33,6 +32,13 @@
             <el-tag v-if="nodeCpuResp?.metrics?.note" type="info" class="ml8">
               {{ nodeCpuResp.metrics.note }}
             </el-tag>
+
+            <el-tag v-if="isDevMode && nodeCpuResp?.metrics?.mape != null" type="warning" class="ml8">
+              mape: {{ formatRatio(nodeCpuResp.metrics.mape) }}
+            </el-tag>
+            <el-tag v-if="isDevMode && nodeCpuResp?.metrics?.baseline_mape != null" type="info" class="ml8">
+              baseline_mape: {{ formatRatio(nodeCpuResp.metrics.baseline_mape) }}
+            </el-tag>
           </div>
 
           <div ref="cpuChartRef" class="chart"></div>
@@ -62,6 +68,13 @@
 
             <el-tag v-if="nodeMemResp?.metrics?.note" type="info" class="ml8">
               {{ nodeMemResp.metrics.note }}
+            </el-tag>
+
+            <el-tag v-if="isDevMode && nodeMemResp?.metrics?.mape != null" type="warning" class="ml8">
+              mape: {{ formatRatio(nodeMemResp.metrics.mape) }}
+            </el-tag>
+            <el-tag v-if="isDevMode && nodeMemResp?.metrics?.baseline_mape != null" type="info" class="ml8">
+              baseline_mape: {{ formatRatio(nodeMemResp.metrics.baseline_mape) }}
             </el-tag>
           </div>
 
@@ -95,6 +108,13 @@
               {{ podCpuResp.metrics.note }}
             </el-tag>
 
+            <el-tag v-if="isDevMode && podCpuResp?.metrics?.mape != null" type="warning" class="ml8">
+              mape: {{ formatRatio(podCpuResp.metrics.mape) }}
+            </el-tag>
+            <el-tag v-if="isDevMode && podCpuResp?.metrics?.baseline_mape != null" type="info" class="ml8">
+              baseline_mape: {{ formatRatio(podCpuResp.metrics.baseline_mape) }}
+            </el-tag>
+
             <el-tag v-if="podCpuResp?.meta?.limit_mcpu" type="success" class="ml8">
               limit: {{ Number(podCpuResp.meta.limit_mcpu).toFixed(0) }} mCPU
             </el-tag>
@@ -117,17 +137,36 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { forecast as aiForecast, classifyAiError } from '@/api/ai_unified'
 import type { CpuForecastResp, MemForecastResp, PodCpuForecastResp } from '@/api/ai_unified'
+import { useTaskResult } from '@/composables/useTaskResult'
 
 type AlertType = 'success' | 'warning' | 'error' | 'info'
 
 const activeTab = ref<'nodeCpu' | 'nodeMem' | 'podCpu'>('nodeCpu')
-const loading = ref(false)
+const nodeCpuTask = useTaskResult<CpuForecastResp>()
+const nodeMemTask = useTaskResult<MemForecastResp>()
+const podCpuTask = useTaskResult<PodCpuForecastResp>()
+
+const loading = computed(
+  () => nodeCpuTask.loading.value || nodeMemTask.loading.value || podCpuTask.loading.value
+)
+
+const route = useRoute()
+const isDevMode = computed(() => {
+  const q = route.query?.dev
+  if (q === '1' || q === 'true') return true
+  try {
+    return localStorage.getItem('devMode') === 'true'
+  } catch {
+    return false
+  }
+})
 
 // ====== 表单默认值（你可以换成真实默认节点/namespace/pod）======
 const nodeCpuForm = ref({
@@ -166,6 +205,7 @@ let cpuChart: echarts.ECharts | null = null
 let memChart: echarts.ECharts | null = null
 let podChart: echarts.ECharts | null = null
 
+// 修复：优化类型安全，避免不必要的非空断言
 function ensureChart(dom?: HTMLDivElement, exist?: echarts.ECharts | null) {
   if (!dom) return null
   if (exist) return exist
@@ -174,6 +214,16 @@ function ensureChart(dom?: HTMLDivElement, exist?: echarts.ECharts | null) {
 
 function toSeriesHistoryPercent(history: { ts: number; value: number }[]) {
   return history.map(p => [p.ts * 1000, Number(p.value.toFixed(2))])
+}
+
+function toSeriesBaseline(points: { ts: number; value: number }[]) {
+  return (points || []).map(p => [p.ts * 1000, Number(p.value.toFixed(2))])
+}
+
+function formatRatio(v?: number): string {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
+  const pct = Math.max(0, v) * 100
+  return `${pct.toFixed(1)}%`
 }
 
 function toSeriesForecastBand(forecast: { ts: number; yhat: number; yhat_lower: number; yhat_upper: number }[]) {
@@ -197,17 +247,23 @@ function renderPercentChart(
   history: any[],
   forecast: any[],
   upper: any[],
-  lower: any[]
+  lower: any[],
+  baseline: any[]
 ) {
-  chart.setOption({
+  chart.clear()
+  const option = {
     title: { text: title, left: 'left', textStyle: { fontSize: 14 } },
     tooltip: {
       trigger: 'axis',
-      valueFormatter: (v: number) => `${v}%`
+      // 修复：将 v: number 改为 v: any，并增加类型校验（核心报错点）
+      valueFormatter: (v: any) => {
+        const num = Number(v)
+        return isNaN(num) ? v : `${num}%`
+      }
     },
-    legend: { data: ['历史', '预测', '预测区间'] },
-    grid: { left: 48, right: 24, top: 48, bottom: 40 },
-    xAxis: { type: 'time' },
+    legend: { type: 'scroll', orient: 'horizontal', bottom: 8, left: 16, right: 16, itemWidth: 10, itemHeight: 6, itemGap: 12, data: ['历史', '预测', 'baseline', '预测区间'] },
+    grid: { left: 50, right: 24, top: 50, bottom: 70, containLabel: true },
+    xAxis: { type: 'time', axisLabel: { margin: 14, hideOverlap: true } },
     yAxis: {
       type: 'value',
       min: 0,
@@ -215,9 +271,12 @@ function renderPercentChart(
       axisLabel: { formatter: '{value}%' }
     },
     series: [
-      { name: '历史', type: 'line', data: history, smooth: true, lineStyle: { width: 2 }, symbolSize: 5 },
-      { name: '预测', type: 'line', data: forecast, smooth: true, lineStyle: { type: 'dashed' }, symbolSize: 5 },
-      { name: '预测区间', type: 'line', data: upper, lineStyle: { opacity: 0 }, stack: 'confidence', symbol: 'none' },
+      { name: '历史', type: 'line', data: history, smooth: true, lineStyle: { width: 2 }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 },
+      { name: '预测', type: 'line', data: forecast, smooth: true, lineStyle: { type: 'dashed' }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 },
+      ...(baseline && baseline.length
+        ? [{ name: 'baseline', type: 'line', data: baseline, smooth: true, lineStyle: { type: 'dotted' }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 }]
+        : []),
+      { name: '预测区间', type: 'line', data: upper, lineStyle: { opacity: 0 }, stack: 'confidence', symbol: 'none', showSymbol: false, sampling: 'lttb', large: true, largeThreshold: 2000 },
       {
         name: '预测区间',
         type: 'line',
@@ -225,10 +284,15 @@ function renderPercentChart(
         lineStyle: { opacity: 0 },
         areaStyle: { color: 'rgba(100, 149, 237, 0.25)' },
         stack: 'confidence',
-        symbol: 'none'
+        symbol: 'none',
+        showSymbol: false,
+        sampling: 'lttb',
+        large: true,
+        largeThreshold: 2000
       }
     ]
-  })
+  }
+  chart.setOption(option, { notMerge: true })
 }
 
 function renderPodCpuChart(
@@ -239,9 +303,12 @@ function renderPodCpuChart(
   forecast: any[],
   upper: any[],
   lower: any[],
+  baseline: any[],
   limitMcpu?: number | null
 ) {
-  chart.setOption({
+  chart.clear()
+  const option = {
+    // 修复：语法错误（反引号闭合错误 + 中文乱码）
     title: { text: title, left: 'left', textStyle: { fontSize: 14 } },
     tooltip: {
       trigger: 'axis',
@@ -266,18 +333,21 @@ function renderPodCpuChart(
         return lines.join('<br/>')
       }
     },
-    legend: { data: ['历史', '预测', '预测区间'] },
-    grid: { left: 56, right: 24, top: 48, bottom: 40 },
-    xAxis: { type: 'time' },
+    legend: { type: 'scroll', orient: 'horizontal', bottom: 8, left: 16, right: 16, itemWidth: 10, itemHeight: 6, itemGap: 12, data: ['历史', '预测', 'baseline', '预测区间'] },
+    grid: { left: 50, right: 24, top: 50, bottom: 70, containLabel: true },
+    xAxis: { type: 'time', axisLabel: { margin: 14, hideOverlap: true } },
     yAxis: {
       type: 'value',
       min: 0,
       axisLabel: { formatter: (v: number) => `${v}` }
     },
     series: [
-      { name: '历史', type: 'line', data: history, smooth: true, lineStyle: { width: 2 }, symbolSize: 5 },
-      { name: '预测', type: 'line', data: forecast, smooth: true, lineStyle: { type: 'dashed' }, symbolSize: 5 },
-      { name: '预测区间', type: 'line', data: upper, lineStyle: { opacity: 0 }, stack: 'confidence', symbol: 'none' },
+      { name: '历史', type: 'line', data: history, smooth: true, lineStyle: { width: 2 }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 },
+      { name: '预测', type: 'line', data: forecast, smooth: true, lineStyle: { type: 'dashed' }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 },
+      ...(baseline && baseline.length
+        ? [{ name: 'baseline', type: 'line', data: baseline, smooth: true, lineStyle: { type: 'dotted' }, symbol: 'none', showSymbol: false, emphasis: { focus: 'series', showSymbol: true }, sampling: 'lttb', large: true, largeThreshold: 2000, progressive: 2000 }]
+        : []),
+      { name: '预测区间', type: 'line', data: upper, lineStyle: { opacity: 0 }, stack: 'confidence', symbol: 'none', showSymbol: false, sampling: 'lttb', large: true, largeThreshold: 2000 },
       {
         name: '预测区间',
         type: 'line',
@@ -285,10 +355,15 @@ function renderPodCpuChart(
         lineStyle: { opacity: 0 },
         areaStyle: { color: 'rgba(100, 149, 237, 0.25)' },
         stack: 'confidence',
-        symbol: 'none'
+        symbol: 'none',
+        showSymbol: false,
+        sampling: 'lttb',
+        large: true,
+        largeThreshold: 2000
       }
     ]
-  })
+  }
+  chart.setOption(option, { notMerge: true })
 }
 
 function peakOfForecast(forecast: { yhat: number; yhat_upper: number }[]) {
@@ -341,43 +416,156 @@ const podConclusion = computed(() => {
   return conclusionByPodCpu(peak, limit)
 })
 
+watch(
+  () => nodeCpuTask.result.value,
+  async (data) => {
+    console.log('[nodeCpuTask.result] Watch triggered', { data, hasData: !!data, dataKeys: data ? Object.keys(data) : [], historyLength: data?.history?.length || 0, forecastLength: data?.forecast?.length || 0 })
+    if (!data) {
+      console.warn('[nodeCpuTask.result] Data is empty')
+      return
+    }
+    nodeCpuResp.value = data
+    warnStepAdjusted((data as any)?.meta)
+
+    await nextTick()
+    console.log('[nodeCpuTask.result] After nextTick, DOM ready check', { cpuChartRef: !!cpuChartRef.value })
+
+    cpuChart = ensureChart(cpuChartRef.value, cpuChart)
+    console.log('[nodeCpuTask.result] Chart initialized:', { cpuChartOk: !!cpuChart })
+
+    if (cpuChart) {
+      try {
+        const history = toSeriesHistoryPercent(data.history || [])
+        const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
+        const baseline = isDevMode.value ? toSeriesBaseline((data.meta as any)?.baseline_points || []) : []
+        console.log('[nodeCpuTask.result] Data transform done', { historyLen: history.length, yhatLen: yhat.length })
+        renderPercentChart(cpuChart, '节点 CPU 使用率（%）', history, yhat, upper, lower, baseline)
+        console.log('[nodeCpuTask.result] Chart rendered successfully')
+      } catch (err) {
+        console.error('[nodeCpuTask.result] Error during rendering:', err)
+      }
+    } else {
+      console.error('[nodeCpuTask.result] Failed to initialize chart, cpuChartRef:', cpuChartRef.value)
+    }
+  }
+)
+
+watch(
+  () => nodeCpuTask.error.value,
+  (message) => {
+    if (!message) return
+    ElMessage.error(message || '节点 CPU 预测失败')
+  }
+)
+
+watch(
+  () => nodeMemTask.result.value,
+  async (data) => {
+    console.log('[nodeMemTask.result] Watch triggered', { hasData: !!data, historyLength: data?.history?.length || 0, forecastLength: data?.forecast?.length || 0 })
+    if (!data) return
+    nodeMemResp.value = data
+    warnStepAdjusted((data as any)?.meta)
+
+    await nextTick()
+
+    memChart = ensureChart(memChartRef.value, memChart)
+    if (memChart) {
+      try {
+        const history = toSeriesHistoryPercent(data.history || [])
+        const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
+        const baseline = isDevMode.value ? toSeriesBaseline((data.meta as any)?.baseline_points || []) : []
+        renderPercentChart(memChart, '节点内存使用率（%）', history, yhat, upper, lower, baseline)
+        console.log('[nodeMemTask.result] Chart rendered successfully')
+      } catch (err) {
+        console.error('[nodeMemTask.result] Error during rendering:', err)
+      }
+    }
+  }
+)
+
+watch(
+  () => podCpuTask.result.value,
+  async (data) => {
+    console.log('[podCpuTask.result] Watch triggered', { hasData: !!data, historyLength: data?.history?.length || 0, forecastLength: data?.forecast?.length || 0 })
+    if (!data) return
+    podCpuResp.value = data
+    warnStepAdjusted((data as any)?.meta)
+
+    await nextTick()
+
+    podChart = ensureChart(podChartRef.value, podChart)
+    if (podChart) {
+      try {
+        const history = (data.history || []).map(p => [p.ts * 1000, Number(p.value.toFixed(2))])
+        const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
+        const unit = data.meta?.unit || 'mCPU'
+        const limit = data.meta?.limit_mcpu ?? null
+        const baseline = isDevMode.value ? toSeriesBaseline((data.meta as any)?.baseline_points || []) : []
+
+        renderPodCpuChart(
+          podChart,
+          `Pod CPU 使用量（${unit}）`,
+          unit,
+          history,
+          yhat,
+          upper,
+          lower,
+          baseline,
+          limit
+        )
+        console.log('[podCpuTask.result] Chart rendered successfully')
+      } catch (err) {
+        console.error('[podCpuTask.result] Error during rendering:', err)
+      }
+    }
+  }
+)
+
+watch(
+  () => podCpuTask.error.value,
+  (message) => {
+    if (!message) return
+    ElMessage.error(message || 'Pod CPU 预测失败')
+  }
+)
+
 // ====== 数据加载 ======
 async function loadNodeCpu() {
   if (!nodeCpuForm.value.node) return ElMessage.warning('请输入节点名')
-  loading.value = true
   try {
-    const { data } = await aiForecast({ target: 'node_cpu', ...nodeCpuForm.value })
-    nodeCpuResp.value = data as CpuForecastResp
-    warnStepAdjusted(data?.meta)
-
-    cpuChart = ensureChart(cpuChartRef.value!, cpuChart)
-    const history = toSeriesHistoryPercent(data.history || [])
-    const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
-    renderPercentChart(cpuChart!, '节点 CPU 使用率（%）', history, yhat, upper, lower)
+    console.log('[loadNodeCpu] Starting forecast request')
+    const { data } = await aiForecast({ target: 'node_cpu', async_mode: true, ...nodeCpuForm.value })
+    console.log('[loadNodeCpu] Forecast response received', { data })
+    const taskId = (data as any)?.task_id
+    if (!taskId) {
+      console.error('[loadNodeCpu] No task_id in response')
+      ElMessage.error('task submit failed')
+      return
+    }
+    console.log('[loadNodeCpu] Starting task polling', { taskId })
+    nodeCpuTask.start(taskId)
   } catch (e: any) {
+    console.error('[loadNodeCpu] Error occurred', e)
     const err = classifyAiError(e)
     if (err.kind === 'param' || err.kind === 'expired') {
       ElMessage.warning(err.message || '参数错误')
     } else {
       ElMessage.error(err.message || '节点 CPU 预测失败')
     }
-  } finally {
-    loading.value = false
   }
 }
 
+
 async function loadNodeMem() {
   if (!nodeMemForm.value.node) return ElMessage.warning('请输入节点名')
-  loading.value = true
   try {
-    const { data } = await aiForecast({ target: 'node_mem', ...nodeMemForm.value })
-    nodeMemResp.value = data as MemForecastResp
-    warnStepAdjusted(data?.meta)
-
-    memChart = ensureChart(memChartRef.value!, memChart)
-    const history = toSeriesHistoryPercent(data.history || [])
-    const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
-    renderPercentChart(memChart!, '节点内存使用率（%）', history, yhat, upper, lower)
+    const { data } = await aiForecast({ target: 'node_mem', async_mode: true, ...nodeMemForm.value })
+    const taskId = (data as any)?.task_id
+    if (!taskId) {
+      ElMessage.error('task submit failed')
+      return
+    }
+    nodeMemTask.start(taskId)
   } catch (e: any) {
     const err = classifyAiError(e)
     if (err.kind === 'param' || err.kind === 'expired') {
@@ -385,36 +573,21 @@ async function loadNodeMem() {
     } else {
       ElMessage.error(err.message || '节点内存预测失败')
     }
-  } finally {
-    loading.value = false
   }
 }
+
 
 async function loadPodCpu() {
   if (!podCpuForm.value.namespace) return ElMessage.warning('请输入 namespace')
   if (!podCpuForm.value.pod) return ElMessage.warning('请输入 pod 名')
-  loading.value = true
   try {
-    const { data } = await aiForecast({ target: 'pod_cpu', ...podCpuForm.value })
-    podCpuResp.value = data as PodCpuForecastResp
-    warnStepAdjusted(data?.meta)
-
-    podChart = ensureChart(podChartRef.value!, podChart)
-    const history = (data.history || []).map(p => [p.ts * 1000, Number(p.value.toFixed(2))])
-    const { yhat, upper, lower } = toSeriesForecastBand(data.forecast || [])
-    const unit = data.meta?.unit || 'mCPU'
-    const limit = data.meta?.limit_mcpu ?? null
-
-    renderPodCpuChart(
-      podChart!,
-      `Pod CPU 使用量（${unit}）`,
-      unit,
-      history,
-      yhat,
-      upper,
-      lower,
-      limit
-    )
+    const { data } = await aiForecast({ target: 'pod_cpu', async_mode: true, ...podCpuForm.value })
+    const taskId = (data as any)?.task_id
+    if (!taskId) {
+      ElMessage.error('task submit failed')
+      return
+    }
+    podCpuTask.start(taskId)
   } catch (e: any) {
     const err = classifyAiError(e)
     if (err.kind === 'param' || err.kind === 'expired') {
@@ -422,10 +595,9 @@ async function loadPodCpu() {
     } else {
       ElMessage.error(err.message || 'Pod CPU 预测失败')
     }
-  } finally {
-    loading.value = false
   }
 }
+
 
 function refreshActive() {
   if (activeTab.value === 'nodeCpu') return loadNodeCpu()

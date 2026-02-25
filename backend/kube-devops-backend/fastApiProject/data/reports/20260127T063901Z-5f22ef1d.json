@@ -1,0 +1,136 @@
+{
+  "runId": "20260127T063901Z-5f22ef1d",
+  "updatedAt": "2026-01-27T06:39:02.017160+00:00",
+  "durationMs": 617,
+  "summary": {
+    "total": 7,
+    "ok": 5,
+    "warn": 1,
+    "error": 1,
+    "skip": 0
+  },
+  "items": [
+    {
+      "key": "nodes_ready",
+      "title": "节点状态（Ready/可调度）",
+      "level": "error",
+      "detail": "节点总数：4；NotReady：k3s-node03；SchedulingDisabled：k3s-node03",
+      "suggestion": "检查对应节点的 kubelet/containerd/flannel 状态与资源压力（Memory/Disk/PIDPressure）。",
+      "evidence": {
+        "total": 4,
+        "notReady": [
+          "k3s-node03"
+        ],
+        "schedulingDisabled": [
+          "k3s-node03"
+        ]
+      },
+      "durationMs": 65
+    },
+    {
+      "key": "pods_abnormal",
+      "title": "业务 Pod 异常（CrashLoop/ImagePull/频繁重启）",
+      "level": "warn",
+      "detail": "高重启：31",
+      "suggestion": "结合 events 与 logs 定位原因（镜像仓库/资源不足/配置错误/探针失败）。",
+      "evidence": {
+        "totalPods": 27,
+        "crashSamples": [],
+        "imagePullSamples": [],
+        "highRestartSamples": [
+          "kube-system/coredns-5688667fd4-75tzb(restarts=15)",
+          "kube-system/local-path-provisioner-774c6665dc-p69kn(restarts=16)",
+          "kube-system/metrics-server-6f4c6675d5-2k5l8(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-9d4tk(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-rn8p4(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=15)",
+          "kube-system/svclb-traefik-eaa8d37f-rwcsn(restarts=15)",
+          "kube-system/traefik-c98fdf6fb-cm6tg(restarts=15)",
+          "logging/loki-0(restarts=15)",
+          "logging/loki-0(restarts=15)",
+          "logging/loki-canary-jm4sm(restarts=15)",
+          "logging/loki-canary-l7jgz(restarts=15)",
+          "logging/loki-canary-ng424(restarts=15)",
+          "logging/loki-gateway-569b955fd6-lzls5(restarts=57)",
+          "logging/promtail-2hr9w(restarts=15)",
+          "logging/promtail-rvbhb(restarts=15)",
+          "logging/promtail-vl94d(restarts=15)",
+          "monitoring/alertmanager-kube-prometheus-stack-alertmanager-0(restarts=15)"
+        ]
+      },
+      "durationMs": 526
+    },
+    {
+      "key": "events",
+      "title": "集群事件（Warning/Error）",
+      "level": "ok",
+      "detail": "无 Warning/Error 事件",
+      "suggestion": null,
+      "evidence": {
+        "samples": [],
+        "totalEvents": 0,
+        "badEvents": 0
+      },
+      "durationMs": 262
+    },
+    {
+      "key": "kube_dns",
+      "title": "kube-dns Endpoints（是否为空）",
+      "level": "ok",
+      "detail": "kube-dns Endpoints 正常",
+      "suggestion": null,
+      "evidence": {
+        "addresses": 1
+      },
+      "durationMs": 547
+    },
+    {
+      "key": "kube_system_core_pods",
+      "title": "kube-system 核心组件 Pod 状态",
+      "level": "ok",
+      "detail": "核心组件正常",
+      "suggestion": null,
+      "evidence": {
+        "matched": 3,
+        "bad": []
+      },
+      "durationMs": 176
+    },
+    {
+      "key": "prometheus",
+      "title": "Prometheus 采集状态",
+      "level": "ok",
+      "detail": "Prometheus 可用（up > 0）",
+      "suggestion": null,
+      "evidence": {
+        "sum_up": 20.0
+      },
+      "durationMs": 88
+    },
+    {
+      "key": "storage",
+      "title": "存储（StorageClass / PV / PVC）",
+      "level": "ok",
+      "detail": "SC:1 PV:3 PVC:3",
+      "suggestion": null,
+      "evidence": {
+        "storageClasses": [
+          "local-path"
+        ],
+        "pvBad": [],
+        "pvcBad": [],
+        "pvCount": 3,
+        "pvcCount": 3
+      },
+      "durationMs": 580
+    }
+  ],
+  "meta": {
+    "enablePrometheus": true,
+    "include": [],
+    "perCheckTimeoutSeconds": 5,
+    "totalTimeoutSeconds": 25
+  }
+}

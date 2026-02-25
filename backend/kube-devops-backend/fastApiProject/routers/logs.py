@@ -1,6 +1,6 @@
 # /routers/logs.py
 from fastapi import APIRouter, Query, Depends
-from services.loki_client import query_logs_range, query_logs_instant
+from services.monitoring.loki_client import query_logs_range, query_logs_instant
 from routers.authz import require_user
 
 router = APIRouter(prefix="/logs", tags=["Logs"])

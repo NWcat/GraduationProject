@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple, Optional
 
 from fastapi import APIRouter, Query
 
-from services.prometheus_client import prom_query, range_by_minutes, instant_value
+from services.monitoring.prometheus_client import prom_query, range_by_minutes, instant_value
 
 router = APIRouter(prefix="/api/monitor", tags=["Monitor"])
 

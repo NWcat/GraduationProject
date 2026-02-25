@@ -111,6 +111,10 @@
           :description="ruleConclusionText"
         />
 
+        <div v-if="isDevMode && resp?.meta?.baseline_mape != null" class="mt12 dev-meta">
+          <el-tag size="small" type="info">baseline_mape: {{ formatPct(Number(resp.meta.baseline_mape)) }}</el-tag>
+        </div>
+
         <div v-if="resp?.suggestion_id && !resp.llm_summary" class="mt12">
           <el-button size="small" :loading="summaryLoading" @click="fetchSummary">获取总结</el-button>
         </div>
@@ -165,8 +169,32 @@
           </el-table-column>
 
           <el-table-column label="Evidence" min-width="260">
-            <template #default="{ row }">
+            <template #default="{ row, $index }">
+              <el-collapse v-model="openedAnomalies">
+                <el-collapse-item :name="anomalyKey(row, $index)" title="异常点">
+                  <div v-if="anomalyCount(row) > 0" class="anom-list">
+                    <div v-for="(a, i) in anomalyTop(row)" :key="i" class="anom-row">
+                      <span class="mono">{{ formatTs(a.ts) }}</span>
+                      <span>value={{ fmtNum(a.value) }}</span>
+                      <span>score={{ fmtNum(a.score) }}</span>
+                      <span class="mono">{{ a.reason || '-' }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="anom-empty">无异常点</div>
+                </el-collapse-item>
+              </el-collapse>
               <pre class="json">{{ pretty(row.evidence) }}</pre>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-if="isDevMode" label="AI" min-width="220">
+            <template #default="{ row }">
+              <div class="ai-meta">
+                <div><b>action_type</b>: {{ row.action_type || '-' }}</div>
+                <div><b>confidence</b>: {{ formatPct(row.confidence) }}</div>
+                <div><b>risk</b>: {{ row.risk || '-' }}</div>
+                <div><b>degrade</b>: {{ row.degrade_reason || '-' }}</div>
+              </div>
             </template>
           </el-table-column>
 
@@ -288,9 +316,33 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="Evidence" min-width="260">
+          <el-table-column label="Evidence" min-width="260">
+            <template #default="{ row, $index }">
+              <el-collapse v-model="openedAnomalies">
+                <el-collapse-item :name="anomalyKey(row, $index)" title="异常点">
+                  <div v-if="anomalyCount(row) > 0" class="anom-list">
+                    <div v-for="(a, i) in anomalyTop(row)" :key="i" class="anom-row">
+                      <span class="mono">{{ formatTs(a.ts) }}</span>
+                      <span>value={{ fmtNum(a.value) }}</span>
+                      <span>score={{ fmtNum(a.score) }}</span>
+                      <span class="mono">{{ a.reason || '-' }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="anom-empty">无异常点</div>
+                </el-collapse-item>
+              </el-collapse>
+              <pre class="json">{{ pretty(row.evidence) }}</pre>
+            </template>
+          </el-table-column>
+
+            <el-table-column v-if="isDevMode" label="AI" min-width="220">
               <template #default="{ row }">
-                <pre class="json">{{ pretty(row.evidence) }}</pre>
+                <div class="ai-meta">
+                  <div><b>action_type</b>: {{ row.action_type || '-' }}</div>
+                  <div><b>confidence</b>: {{ formatPct(row.confidence) }}</div>
+                  <div><b>risk</b>: {{ row.risk || '-' }}</div>
+                  <div><b>degrade</b>: {{ row.degrade_reason || '-' }}</div>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -451,13 +503,32 @@
             </el-collapse-item>
           </el-collapse>
         </el-form-item>
+
+        <el-form-item v-if="!execDryRun" label="确认执行">
+          <div class="confirm-box">
+            <el-checkbox v-model="confirmChecked">我已知晓风险</el-checkbox>
+            <el-input v-model="confirmText" class="w200" :placeholder="`输入 ${confirmRequiredText}`" />
+            <div class="hint2">确认词：{{ confirmRequiredText }}</div>
+          </div>
+        </el-form-item>
       </el-form>
+
+      <el-alert
+        v-if="execForbidReason"
+        class="mt12"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="执行被限制"
+        :description="execForbidReason"
+      />
 
       <template #footer>
         <el-button @click="execOpen = false">取消</el-button>
         <el-button
           type="primary"
           :loading="applyLoading"
+          :disabled="execForbidReason !== ''"
           @click="doExecute"
         >
           {{ execDryRun ? '审计执行（Dry-Run）' : '确认执行（会改集群）' }}
@@ -479,6 +550,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
 import {
@@ -496,6 +568,7 @@ import { assistantChat } from '@/api/ai_unified'
 import { useAssistantStore } from '@/stores/assistant'
 import { storeToRefs } from 'pinia'
 import { useAiSuggestionsStore } from '@/stores/aiSuggestions'
+import { useTaskResult } from '@/composables/useTaskResult'
 
 type Target = 'node_cpu' | 'node_mem' | 'pod_cpu'
 type Severity = 'info' | 'warning' | 'critical'
@@ -522,6 +595,10 @@ interface SuggestionItem {
   severity: Severity
   title: string
   evidence: Record<string, unknown>
+  confidence?: number
+  risk?: string
+  degrade_reason?: string
+  action_type?: string
   rationale: string
   action: ActionHint
 }
@@ -559,13 +636,29 @@ const tuneMemLimMb = ref<number | null>(null)
 
 const assistantStore = useAssistantStore()
 
-const loading = ref(false)
+const submitLoading = ref(false)
 const summaryLoading = ref(false)
-const applyLoading = ref(false)
+const executeSubmitting = ref(false)
+const suggestionsTask = useTaskResult<SuggestionsResp>()
+const executeTask = useTaskResult<Record<string, unknown>>()
+const loading = computed(() => submitLoading.value || suggestionsTask.loading.value)
+const applyLoading = computed(() => executeSubmitting.value || executeTask.loading.value)
 
+const route = useRoute()
 const sugStore = useAiSuggestionsStore()
 const { form, resp, history } = storeToRefs(sugStore)
+
+const isDevMode = computed(() => {
+  const q = route.query?.dev
+  if (q === '1' || q === 'true') return true
+  try {
+    return localStorage.getItem('devMode') === 'true'
+  } catch {
+    return false
+  }
+})
 const rowStates = ref<Record<string, SuggestionState>>({})
+const openedAnomalies = ref<string[]>([])
 
 const visibleSuggestions = computed(() => {
   const r = resp.value
@@ -621,6 +714,39 @@ watch(
   },
   { immediate: true }
 );
+
+watch(
+  () => suggestionsTask.result.value,
+  async (data) => {
+    if (!data) return
+    await applySuggestionsResult(data)
+  }
+)
+
+watch(
+  () => suggestionsTask.error.value,
+  (message) => {
+    if (!message) return
+    ElMessage.error(message || '智能建议任务失败')
+  }
+)
+
+watch(
+  () => executeTask.result.value,
+  async (result) => {
+    if (!result) return
+    await applyExecuteResult(result)
+  }
+)
+
+watch(
+  () => executeTask.error.value,
+  async (message) => {
+    if (!message) return
+    ElMessage.error(message || '执行失败')
+    await postFeedback('fail', message)
+  }
+)
 
 /** =========================
  * Executable helper (对齐后端 _map_action_hint_to_ops_req)
@@ -696,6 +822,15 @@ async function syncSuggestionStates(r: SuggestionsResp): Promise<void> {
     const message = explainAiHttpError(e)
     if (message) ElMessage.error(message)
   }
+}
+
+async function applySuggestionsResult(data: SuggestionsResp): Promise<void> {
+  const normalized = normalizeSuggestionsResp(data)
+  sugStore.pushHistory(normalized)
+  openedHistory.value = history.value[0]?.id ? [history.value[0].id] : []
+  assistantStore.setLastSuggestions(normalized as any)
+  await syncSuggestionStates(normalized)
+  ElMessage.success('å·²ç”Ÿæˆå»ºè®®')
 }
 
 function pickDeploymentFromEvidence(evidence: Record<string, unknown>): { ns: string; name: string } {
@@ -777,6 +912,11 @@ function pretty(v: unknown): string {
     return String(v)
   }
 }
+function formatPct(v?: number): string {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
+  const p = Math.max(0, Math.min(1, v)) * 100
+  return `${p.toFixed(0)}%`
+}
 function formatTs(ts: number): string {
   try {
     return new Date(ts).toLocaleString()
@@ -784,8 +924,29 @@ function formatTs(ts: number): string {
     return String(ts)
   }
 }
+function fmtNum(v: unknown): string {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
+  return v.toFixed(2)
+}
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
+}
+function anomalyKey(row: SuggestionItem, index: number): string {
+  if (resp.value) return normalizeSuggestionKey(resp.value, index, row)
+  return `${row.title || 'item'}-${index}`
+}
+function anomalyCount(row: SuggestionItem): number {
+  const evidence = (row as any)?.evidence || {}
+  const an = (evidence as any).anomalies
+  if (an && typeof an.count === 'number') return an.count
+  if (an && Array.isArray(an.top)) return an.top.length
+  return 0
+}
+function anomalyTop(row: SuggestionItem): Array<{ ts: number; value: number; score: number; reason?: string }> {
+  const evidence = (row as any)?.evidence || {}
+  const an = (evidence as any).anomalies
+  if (an && Array.isArray(an.top)) return an.top
+  return []
 }
 /** =========================
  * Actions
@@ -797,10 +958,13 @@ function reset(): void {
 }
 
 async function run(): Promise<void> {
-  loading.value = true
+  submitLoading.value = true
   try {
+    resp.value = null
+    rowStates.value = {}
     const params: FetchSuggestionsParams = {
       target: form.value.target,
+      async_mode: true,
       use_llm: form.value.use_llm,
       sustain_minutes: form.value.sustain_minutes,
       step: form.value.step,
@@ -812,7 +976,7 @@ async function run(): Promise<void> {
       params.namespace = form.value.namespace
       params.pod = form.value.pod
 
-      // ✅ 把策略参数带上（后端会用于 rules.linear）
+      // Pod CPU 扩容时，scale_policy 用来判断是否应用 linear/stair 扩容规则
       params.scale_policy = (form.value as any).scale_policy as ScalePolicy
       params.safe_low = Number((form.value as any).safe_low)
       params.safe_high = Number((form.value as any).safe_high)
@@ -822,21 +986,20 @@ async function run(): Promise<void> {
     }
 
     const { data } = await aiSuggestions(params as any)
-    const normalized = normalizeSuggestionsResp(data)
-
-    sugStore.pushHistory(normalized)
-    openedHistory.value = history.value[0]?.id ? [history.value[0].id] : []
-
-    assistantStore.setLastSuggestions(normalized as any)
-    await syncSuggestionStates(normalized)
-    ElMessage.success('已生成建议')
+    const taskId = (data as any)?.task_id
+    if (!taskId) {
+      ElMessage.error('task submit failed')
+      return
+    }
+    suggestionsTask.start(taskId)
   } catch (e: unknown) {
     const message = explainAiHttpError(e)
     if (message) ElMessage.error(message)
   } finally {
-    loading.value = false
+    submitLoading.value = false
   }
 }
+
 
 async function fetchSummary(): Promise<void> {
   if (!resp.value?.suggestion_id) {
@@ -910,6 +1073,13 @@ function toSuggestionItem(x: unknown): SuggestionItem | null {
   const title = typeof (x as any).title === 'string' ? (x as any).title : '(no title)'
   const rationale = typeof (x as any).rationale === 'string' ? (x as any).rationale : ''
   const evidence = isObject((x as any).evidence) ? ((x as any).evidence as Record<string, unknown>) : {}
+  const confidence =
+    typeof (x as any).confidence === 'number' ? (x as any).confidence : 0.1
+  const risk = typeof (x as any).risk === 'string' ? (x as any).risk : 'low'
+  const degrade_reason =
+    typeof (x as any).degrade_reason === 'string' ? (x as any).degrade_reason : ''
+  const action_type =
+    typeof (x as any).action_type === 'string' ? (x as any).action_type : 'alert_only'
 
   const actionObj = isObject((x as any).action) ? (x as any).action : {}
   const kind = (typeof (actionObj as any).kind === 'string' ? (actionObj as any).kind : 'no_action') as ActionKind
@@ -921,6 +1091,10 @@ function toSuggestionItem(x: unknown): SuggestionItem | null {
     severity: sevOk,
     title,
     evidence,
+    confidence,
+    risk,
+    degrade_reason,
+    action_type,
     rationale,
     action: { kind, params }
   }
@@ -944,6 +1118,11 @@ const execOpen = ref(false)
 const execDryRun = ref(true)
 const execIndex = ref(0)
 const execKind = ref<ActionKind>('no_action')
+const execActionType = ref('alert_only')
+const confirmRequiredText = 'EXECUTE'
+const confirmChecked = ref(false)
+const confirmText = ref('')
+const execForbidReason = ref('')
 
 const execNamespace = ref('default')
 const execName = ref('')
@@ -996,6 +1175,16 @@ const execSummary = computed(() => {
 
 const dryRunText = computed(() => (execDryRun.value ? '安全执行（Dry-Run）' : '真实执行'))
 
+watch(execDryRun, (v) => {
+  if (v) {
+    execForbidReason.value = ''
+    return
+  }
+  if (execActionType.value === 'alert_only') {
+    execForbidReason.value = '仅允许演练（Dry-Run）'
+  }
+})
+
 
 function openExecuteDialog(row: SuggestionItem, index: number) {
   const kind = row.action.kind
@@ -1015,6 +1204,8 @@ function openExecuteDialog(row: SuggestionItem, index: number) {
   execIndex.value = index
   execKind.value = kind as ActionKind
   execDryRun.value = true
+  execActionType.value = row.action_type || 'alert_only'
+  execForbidReason.value = ''
 
   // reset（先清空，再回填）
   execNamespace.value = 'default'
@@ -1026,6 +1217,9 @@ function openExecuteDialog(row: SuggestionItem, index: number) {
   tuneCpuLimM.value = null
   tuneMemReqMb.value = null
   tuneMemLimMb.value = null
+  confirmChecked.value = false
+  confirmText.value = ''
+  execForbidReason.value = ''
 
   const r = resp.value
 
@@ -1071,26 +1265,38 @@ async function doExecute(): Promise<void> {
 
   const kind = execKind.value
   if (!isExecutableKind(kind)) {
-    ElMessage.warning(`不可执行：${kind}`)
+    ElMessage.warning(`不支持的操作类型: ${kind}`)
     return
   }
 
-  // 前端先校验必填字段，避免后端 500
+  if (!execDryRun.value) {
+    if (!confirmChecked.value) {
+      ElMessage.warning('请勾选确认框')
+      return
+    }
+    if (confirmText.value.trim() !== confirmRequiredText) {
+      ElMessage.warning(`执行文本不匹配，应为 ${confirmRequiredText}`)
+      return
+    }
+  }
+
+  // 校验参数合法性，某些操作需要特定参数（会导致 HTTP 400 或 500 错误）
   if (needExecName(kind) && !execName.value) {
-    ElMessage.warning('请填写 exec_name（Deployment 名称）')
+    ElMessage.warning('缺少 exec_name，应为 Deployment 名称')
     return
   }
   if (needExecPod(kind) && !execPod.value) {
-    ElMessage.warning('请填写 exec_pod（Pod 名称）')
+    ElMessage.warning('缺少 exec_pod，应为 Pod 名称')
     return
   }
 
-  // 基础参数：用于后端重新 build_suggestions（必须与当前表单一致）
+  // 重新构建建议以确保索引和参数一致，因为建议可能已过期
   const params: any = {
     target: r.target,
     suggestion_index: execIndex.value,
     expected_kind: execKind.value,
     dry_run: execDryRun.value,
+    confirm_text: execDryRun.value ? undefined : confirmText.value.trim(),
     history_minutes: 240,
     horizon_minutes: form.value.horizon_minutes,
     step: form.value.step,
@@ -1109,38 +1315,43 @@ async function doExecute(): Promise<void> {
     params.node = form.value.node
   }
 
-  // 执行动作用对象（exec_*）
+  // 设置执行命名空间和名称参数
   params.exec_namespace = execNamespace.value || 'default'
   if (needExecName(kind)) params.exec_name = execName.value
   if (needExecPod(kind)) params.exec_pod = execPod.value
 
-  // ✅ 把“弹窗编辑参数”用 action.params 的同名字段发给后端（便于后端覆盖 hint.params）
+  // 合并建议的默认参数与用户覆盖的参数
   if (kind === 'scale_deployment') {
-    // 用 replicas / replicas_delta（不要用 exec_replicas）
+    // 处理 replicas / replicas_delta 参数映射
     if (execReplicas.value != null) params.replicas = Number(execReplicas.value)
     if (execReplicasDelta.value != null) params.replicas_delta = Number(execReplicasDelta.value)
   }
 
   if (kind === 'tune_requests_limits') {
-    // 用 cpu_request_m / cpu_limit_m / mem_request_mb / mem_limit_mb（不要用 exec_cpu_request_m）
+    // 处理 CPU 和内存资源参数映射
     if (tuneCpuReqM.value != null) params.cpu_request_m = Number(tuneCpuReqM.value)
     if (tuneCpuLimM.value != null) params.cpu_limit_m = Number(tuneCpuLimM.value)
     if (tuneMemReqMb.value != null) params.mem_request_mb = Number(tuneMemReqMb.value)
     if (tuneMemLimMb.value != null) params.mem_limit_mb = Number(tuneMemLimMb.value)
   }
 
-  applyLoading.value = true
+  executeSubmitting.value = true
   try {
+    execForbidReason.value = ''
     const { data } = await aiExecute(params)
-    ElMessage.success(data.detail || '已执行')
-    execOpen.value = false
-    await postFeedback('success')
+    const taskId = (data as any)?.task_id
+    if (!taskId) {
+      ElMessage.error('task submit failed')
+      return
+    }
+    ElMessage.success('执行成功')
+    executeTask.start(taskId)
   } catch (e: unknown) {
-    const message = explainAiHttpError(e) || '执行失败'
+    const message = explainAiHttpError(e) || 'execute failed'
     if (message) ElMessage.error(message)
     await postFeedback('fail', message)
   } finally {
-    applyLoading.value = false
+    executeSubmitting.value = false
   }
 }
 
@@ -1195,6 +1406,28 @@ async function postFeedback(outcome: 'success' | 'fail' | 'ignored', detail?: st
   } catch (e) {
     console.warn('feedback failed', e)
   }
+}
+
+async function applyExecuteResult(result: Record<string, unknown>): Promise<void> {
+  const forbid = (result as any)?.forbid
+  if (forbid) {
+    execForbidReason.value =
+      ((result as any)?.forbid_reason as string) || ((result as any)?.detail as string) || 'æ‰§è¡Œè¢«é™åˆ?'
+    execDryRun.value = true
+    ElMessage.warning(execForbidReason.value)
+    return
+  }
+
+  if ((result as any)?.ok === false) {
+    const msg = ((result as any)?.detail as string) || 'æ‰§è¡Œå¤±è´¥'
+    ElMessage.error(msg)
+    await postFeedback('fail', msg)
+    return
+  }
+
+  ElMessage.success(((result as any)?.detail as string) || 'å·²æ‰§è¡Œ')
+  execOpen.value = false
+  await postFeedback('success')
 }
 
 
@@ -1359,6 +1592,40 @@ async function explain(row: SuggestionItem): Promise<void> {
 .rationale {
   font-size: 13px;
   line-height: 1.55;
+}
+.ai-meta {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #1f2937;
+}
+.dev-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.anom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
+.anom-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #1f2937;
+}
+.anom-empty {
+  font-size: 12px;
+  color: #8a8f98;
+  padding: 6px 0;
+}
+.confirm-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .mt12 {

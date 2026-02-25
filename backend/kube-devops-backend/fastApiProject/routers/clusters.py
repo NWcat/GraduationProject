@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from services.clusters_service import (
+from services.clusters.service import (
     add_cluster,
     activate_cluster,
     delete_cluster,

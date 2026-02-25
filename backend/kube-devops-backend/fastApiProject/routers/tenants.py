@@ -5,7 +5,7 @@ from typing import Optional, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from services.tenants_service import (
+from services.tenants.service import (
     list_tenants, get_tenant, create_tenant, delete_tenant, toggle_tenant,
     bind_namespace, unbind_namespace, upsert_labels, update_quota,
     list_members, add_member, change_member_role, remove_member

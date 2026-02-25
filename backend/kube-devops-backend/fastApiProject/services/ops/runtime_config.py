@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Literal
 
 from config import settings
-from db.sqlite import get_conn, q
+from db.utils.sqlite import get_conn, q
 
 # ✅ 前端 secret 展示/提交占位符（表示“不改”）
 SECRET_PLACEHOLDER = "********"
@@ -214,6 +214,25 @@ SPECS: Dict[str, ConfigSpec] = {
         desc="Grafana base url",
         example="http://192.168.100.10:3000",
     ),
+    "PROMQL_FREE_ENABLED": ConfigSpec(
+        key="PROMQL_FREE_ENABLED",
+        typ="bool",
+        desc="PromQL允许自由查询",
+        example="0",
+    ),
+    "FEISHU_WEBHOOK_URL": ConfigSpec(
+        key="FEISHU_WEBHOOK_URL",
+        typ="str",
+        desc="Feishu webhook url (platform alert push)",
+        secret=True,
+        example="https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
+    ),
+    "ALERTS_PAGE_URL": ConfigSpec(
+        key="ALERTS_PAGE_URL",
+        typ="str",
+        desc="Platform alert center url",
+        example="http://localhost:5173/alerts",
+    ),
 
     # ---- LLM (secret) ----
     "DEEPSEEK_API_KEY": ConfigSpec(
@@ -242,6 +261,56 @@ SPECS: Dict[str, ConfigSpec] = {
         min_i=3,
         max_i=120,
         example="30",
+    ),
+
+    # ---- AI thresholds ----
+    "AUTO_POD_CPU_THRESHOLD_RATIO": ConfigSpec(
+        key="AUTO_POD_CPU_THRESHOLD_RATIO",
+        typ="float",
+        desc="Pod CPU observe threshold ratio",
+        min_f=0.1,
+        max_f=1.2,
+        example="0.8",
+    ),
+    "AUTO_POD_CPU_HIGH_THRESHOLD_RATIO": ConfigSpec(
+        key="AUTO_POD_CPU_HIGH_THRESHOLD_RATIO",
+        typ="float",
+        desc="Pod CPU trigger threshold ratio",
+        min_f=0.1,
+        max_f=1.2,
+        example="0.9",
+    ),
+    "AUTO_POD_CPU_SUSTAIN_MINUTES": ConfigSpec(
+        key="AUTO_POD_CPU_SUSTAIN_MINUTES",
+        typ="int",
+        desc="Pod CPU sustain minutes",
+        min_i=1,
+        max_i=120,
+        example="10",
+    ),
+
+    # ---- AI execute safety ----
+    "AI_EXECUTE_COOLDOWN_MINUTES": ConfigSpec(
+        key="AI_EXECUTE_COOLDOWN_MINUTES",
+        typ="int",
+        desc="AI execute cooldown minutes (same object/action_type)",
+        min_i=1,
+        max_i=1440,
+        example="10",
+    ),
+    "AI_EXECUTE_DAILY_LIMIT": ConfigSpec(
+        key="AI_EXECUTE_DAILY_LIMIT",
+        typ="int",
+        desc="AI execute daily limit (global)",
+        min_i=1,
+        max_i=1000,
+        example="20",
+    ),
+    "AI_EXECUTE_CONFIRM_TEXT": ConfigSpec(
+        key="AI_EXECUTE_CONFIRM_TEXT",
+        typ="str",
+        desc="AI execute confirm text",
+        example="EXECUTE",
     ),
 
     # ---- AI evolution ----

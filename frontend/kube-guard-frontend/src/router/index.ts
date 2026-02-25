@@ -8,7 +8,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'LoginView',
-    component: () => import('@/views/LoginView.vue'),
+    component: () => import('@/views/Auth/LoginView.vue'),
     meta: { title: '登录' },
   },
 
@@ -16,7 +16,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/change-password',
     name: 'ChangePassword',
-    component: () => import('@/views/ChangePasswordView.vue'),
+    component: () => import('@/views/Auth/ChangePasswordView.vue'),
     meta: { title: '首次登录改密', requiresAuth: true },
   },
 
@@ -24,7 +24,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/monitor-wall',
     name: 'MonitorWall',
-    component: () => import('@/views/MonitorWall.vue'),
+    component: () => import('@/views/Monitor/MonitorWall.vue'),
     meta: {
       title: '监控大屏',
       requiresAuth: true,
@@ -41,25 +41,25 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'overview',
         name: 'Overview',
-        component: () => import('@/views/Overview.vue'),
+        component: () => import('@/views/Overview/Overview.vue'),
         meta: { title: '概述', requiresAuth: true },
       },
       {
         path: 'tools/kubectl',
         name: 'KubectlTerminal',
-        component: () => import('@/views/KubectlTerminal.vue'),
+        component: () => import('@/views/Terminal/KubectlTerminal.vue'),
         meta: { title: 'Kubectl 终端', requiresAuth: true },
       },
       {
         path: 'system',
         name: 'SystemStatus',
-        component: () => import('@/views/SystemStatus.vue'),
+        component: () => import('@/views/System/SystemStatus.vue'),
         meta: { title: '系统状态监控', requiresAuth: true },
       },
       {
         path: 'home',
         name: 'Home',
-        component: () => import('@/views/Home.vue'),
+        component: () => import('@/views/Home.vue'), // Home.vue is not moved
         meta: { title: '首页', requiresAuth: true },
       },
 
@@ -67,7 +67,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'nodes',
         name: 'NodeList',
-        component: () => import('@/views/NodeList.vue'),
+        component: () => import('@/views/Nodes/NodeList.vue'),
         meta: { title: '节点', requiresAuth: true },
       },
 
@@ -75,26 +75,26 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'clusters',
         name: 'Clusters',
-        component: () => import('@/views/Nodes/ClusterManage.vue'),
+        component: () => import('@/views/Nodes/ClusterManage.vue'), // Assuming ClusterManage is still in views/Nodes
         meta: { title: '纳管集群', requiresAuth: true },
       },
 
       {
         path: 'workloads',
         name: 'Workloads',
-        component: () => import('@/views/WorkloadsOverview.vue'),
+        component: () => import('@/views/Workloads/WorkloadsOverview.vue'),
         meta: { title: '应用负载', requiresAuth: true },
       },
       {
         path: 'monitor',
         name: 'MonitorOverview',
-        component: () => import('@/views/MonitorOverview.vue'),
+        component: () => import('@/views/Monitor/MonitorOverview.vue'),
         meta: { title: '监控总览', requiresAuth: true },
       },
       {
         path: 'metrics',
         name: 'MetricsQuery',
-        component: () => import('@/views/MetricsQuery.vue'),
+        component: () => import('@/views/Monitor/MetricsQuery.vue'),
         meta: { title: '监控指标查询', requiresAuth: true },
       },
 
@@ -130,6 +130,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '日志详情', requiresAuth: true },
       },
 
+      {
+        path: 'tasks',
+        name: 'Tasks',
+        component: () => import('@/views/Tasks/Tasks.vue'),
+        meta: { title: '任务中心', requiresAuth: true },
+      },
+      {
+        path: 'events',
+        name: 'Events',
+        component: () => import('@/views/Events/Events.vue'),
+        meta: { title: '事件', requiresAuth: true },
+      },
       {
         path: 'ai/forecast',
         name: 'ResourceForecast',

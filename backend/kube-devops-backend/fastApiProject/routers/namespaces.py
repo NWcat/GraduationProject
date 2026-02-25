@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from services import namespaces_service as svc
+from services.namespaces import service as svc
 
 router = APIRouter(prefix="/api/namespaces", tags=["Namespaces"])
 

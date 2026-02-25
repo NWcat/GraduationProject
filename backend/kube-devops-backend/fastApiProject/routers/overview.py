@@ -2,9 +2,9 @@
 from fastapi import APIRouter
 from datetime import datetime, timezone
 
-from services.kube_client import get_cluster_counts
-from services.alert_client import list_alerts
-from services.prometheus_client import instant_value
+from services.k8s.kube_client import get_cluster_counts
+from services.alerts.client import list_alerts
+from services.monitoring.prometheus_client import instant_value
 
 router = APIRouter(prefix="/api", tags=["overview"])
 

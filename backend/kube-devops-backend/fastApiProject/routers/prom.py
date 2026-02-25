@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Depends
 from typing import Any, Dict
 
-from services.prometheus_client import prom_query, prom_query_range, instant_value
+from services.monitoring.prometheus_client import prom_query, prom_query_range, instant_value
 from routers.authz import require_user
-from services.promql_guard import validate_promql, validate_range
+from services.monitoring.promql_guard import validate_promql, validate_range
 
 router = APIRouter(prefix="/api/prom", tags=["Prometheus"])
 

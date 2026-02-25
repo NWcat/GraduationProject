@@ -24,6 +24,7 @@ export interface ErrorMetrics {
   mae?: number
   rmse?: number
   mape?: number
+  baseline_mape?: number
 }
 
 export interface CpuForecastResp {
@@ -88,6 +89,10 @@ export interface SuggestionItem {
   severity: Severity
   title: string
   evidence: Record<string, unknown>
+  confidence?: number
+  risk?: string
+  degrade_reason?: string
+  action_type?: string
   rationale: string
   action: ActionHint
 }
@@ -145,9 +150,15 @@ export interface ApplyActionResp {
   dry_run: boolean
   detail: string
   data: Record<string, any>
+  forbid?: boolean
+  forbid_reason?: string
+  cooldown_remaining?: number
+  limit_remaining?: number
+  planned_action?: Record<string, any> | null
+  evidence_snapshot?: Record<string, any> | null
 }
 
-export type AiTaskStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED'
+export type AiTaskStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'UNKNOWN'
 
 export interface AiTaskResp<T = unknown> {
   task_id: string
@@ -156,7 +167,9 @@ export interface AiTaskResp<T = unknown> {
   error?: { detail?: string }
 }
 
-type AiErrorKind = 'param' | 'expired' | 'system'
+export type AiTaskSubmitResp = Pick<AiTaskResp, 'task_id' | 'status'>
+
+type AiErrorKind = 'param' | 'expired' | 'unsupported' | 'system'
 
 export function classifyAiError(err: any): { kind: AiErrorKind; message: string; status?: number } {
   if (err && err.__ai_kind) {
@@ -168,11 +181,14 @@ export function classifyAiError(err: any): { kind: AiErrorKind; message: string;
   const requestId =
     err?.config?.headers?.['X-Request-Id'] || err?.response?.headers?.['x-request-id']
   const suffix = requestId ? ` (request_id=${requestId})` : ''
-  if (status === 400) return { kind: 'param', message: `${message || 'invalid parameters'}${suffix}`, status }
+  if (status === 400) return { kind: 'param', message: `${message || '参数错误'}${suffix}`, status }
   if (status === 409) {
-    return { kind: 'expired', message: `${message || 'suggestion expired, please re-generate'}${suffix}`, status }
+    return { kind: 'expired', message: `${message || '建议已过期，请重新生成'}${suffix}`, status }
   }
-  return { kind: 'system', message: `${message || 'system error'}${suffix}`, status }
+  if (status === 501) {
+    return { kind: 'unsupported', message: `${message || '操作不支持'}${suffix}`, status }
+  }
+  return { kind: 'system', message: `${message || '系统错误'}${suffix}`, status }
 }
 
 export function explainAiHttpError(err: any): string {
@@ -187,6 +203,8 @@ export function explainAiHttpError(err: any): string {
   if (status === 401) return `未登录或登录已过期${suffix}`
   if (status === 403) return `权限不足${suffix}`
   if (status === 409) return `${message || '建议已过期，请重新生成'}${suffix}`
+  if (status === 429) return `${message || '执行频率受限'}${suffix}`
+  if (status === 501) return `${message || '操作不支持'}${suffix}`
   if (message) return `${message}${suffix}`
   return `请求失败${suffix}`
 }
@@ -195,15 +213,19 @@ function paramError(message: string) {
   return { __ai_kind: 'param', message }
 }
 
-function normalizeHistoryHorizon<T extends Record<string, any>>(params: T): T {
+function normalizeHistoryHorizon<T extends Record<string, any>>(
+  params: T,
+  options?: { min_horizon?: number }
+): T {
   const merged = {
     ...params,
     history_minutes: params.history_minutes ?? params.minutes ?? 240,
     horizon_minutes: params.horizon_minutes ?? params.horizon ?? 120,
     step: params.step ?? 60
   }
-  if (typeof merged.horizon_minutes === 'number' && merged.horizon_minutes < 15) {
-    throw paramError('horizon_minutes must be >= 15')
+  const minHorizon = typeof options?.min_horizon === 'number' ? options.min_horizon : 15
+  if (typeof merged.horizon_minutes === 'number' && merged.horizon_minutes < minHorizon) {
+    throw paramError(`horizon_minutes must be >= ${minHorizon}`)
   }
   return merged
 }
@@ -235,15 +257,14 @@ export async function forecast(params: {
   if (params.target === 'pod_cpu') {
     if (!params.namespace || !params.pod) throw paramError('namespace/pod required')
   }
-  const merged = normalizeHistoryHorizon(params)
-  const resp = await http.get<ForecastResp | AiTaskResp<ForecastResp>>('/api/ai/forecast', {
+  const minHorizon = params.target === 'node_cpu' ? 15 : 1
+  const merged = {
+    ...normalizeHistoryHorizon(params, { min_horizon: minHorizon }),
+    async_mode: params.async_mode ?? true
+  }
+  const resp = await http.get<ForecastResp | AiTaskSubmitResp>('/api/ai/forecast', {
     params: merged
   })
-  const data: any = resp?.data
-  if (data && typeof data.task_id === 'string' && data.task_id) {
-    const result = await pollTask<ForecastResp>(data.task_id)
-    return { ...resp, data: result } as typeof resp
-  }
   return resp
 }
 
@@ -275,18 +296,14 @@ export async function suggestions(params: {
   }
   const merged = {
     ...normalizeHistoryHorizon(params),
+    async_mode: params.async_mode ?? true,
     threshold: params.threshold ?? 85,
     sustain_minutes: params.sustain_minutes ?? 15,
     use_llm: params.use_llm ?? false
   }
-  const resp = await http.get<SuggestionsResp | AiTaskResp<SuggestionsResp>>('/api/ai/suggestions', {
+  const resp = await http.get<SuggestionsResp | AiTaskSubmitResp>('/api/ai/suggestions', {
     params: merged
   })
-  const data: any = resp?.data
-  if (data && typeof data.task_id === 'string' && data.task_id) {
-    const result = await pollTask<SuggestionsResp>(data.task_id)
-    return { ...resp, data: result } as typeof resp
-  }
   return resp
 }
 
@@ -307,6 +324,7 @@ export function execute(params: {
   suggestion_index: number
   expected_kind?: string
   dry_run: boolean
+  confirm_text?: string
   exec_namespace?: string
   exec_name?: string
   exec_pod?: string
@@ -329,9 +347,10 @@ export function execute(params: {
     ...normalizeHistoryHorizon(params),
     threshold: params.threshold ?? 85,
     sustain_minutes: params.sustain_minutes ?? 15,
-    suggestion_id: params.suggestion_id ?? undefined
+    suggestion_id: params.suggestion_id ?? undefined,
+    confirm_text: params.confirm_text ?? undefined
   }
-  return http.post<ApplyActionResp>('/api/ai/execute', null, { params: merged })
+  return http.post<AiTaskSubmitResp>('/api/ai/execute', null, { params: merged })
 }
 
 export function suggestionSummary(params: { suggestion_id: string }) {
@@ -340,11 +359,6 @@ export function suggestionSummary(params: { suggestion_id: string }) {
     '/api/ai/suggestions/summary',
     { params }
   )
-}
-
-export function getTask(task_id: string) {
-  if (!task_id) throw paramError('task_id required')
-  return http.get<AiTaskResp>(`/api/ai/tasks/${task_id}`)
 }
 
 export function assistantChat(payload: {
@@ -377,58 +391,4 @@ export function markSuggestionState(row_key: string, status: SuggestionState) {
 export function fetchSuggestionStates(row_keys: string[]) {
   if (!Array.isArray(row_keys) || row_keys.length === 0) throw paramError('row_keys required')
   return http.post<SuggestionStatesResp>('/api/ai/suggestions/states', { row_keys })
-}
-
-export async function pollTask<T = unknown>(
-  task_id: string,
-  options?: { interval_ms?: number; timeout_ms?: number }
-): Promise<T> {
-  if (!task_id) throw paramError('task_id required')
-  const interval = Math.max(200, Number(options?.interval_ms ?? 800))
-  const timeout = Math.max(1000, Number(options?.timeout_ms ?? 60000))
-  const start = Date.now()
-
-  function extractErrorMessage(payload: any): string {
-    if (!payload) return 'task failed'
-    if (typeof payload === 'string') return payload
-    if (typeof payload.detail === 'string') return payload.detail
-    if (typeof payload.message === 'string') return payload.message
-    if (typeof payload.error === 'string') return payload.error
-    if (typeof payload.error?.detail === 'string') return payload.error.detail
-    if (typeof payload.error?.message === 'string') return payload.error.message
-    return 'task failed'
-  }
-
-  function isParamLikeMessage(message: string): boolean {
-    const text = String(message || '').toLowerCase()
-    if (!text) return false
-    return (
-      text.includes('invalid parameter') ||
-      text.includes('invalid parameters') ||
-      text.includes('required') ||
-      text.includes('must be >=') ||
-      text.includes('must be >') ||
-      text.includes('must be <=') ||
-      text.includes('must be <') ||
-      text.includes('unsupported target')
-    )
-  }
-
-  while (true) {
-    const { data } = await getTask(task_id)
-    const status = data?.status
-    if (status === 'DONE') {
-      return data.result as T
-    }
-    if (status === 'FAILED') {
-      const detail = extractErrorMessage(data?.error)
-      const message = String(detail || '')
-      const kind: AiErrorKind = isParamLikeMessage(message) ? 'param' : 'system'
-      throw { __ai_kind: kind, message }
-    }
-    if (Date.now() - start > timeout) {
-      throw { __ai_kind: 'system', message: 'task timeout' }
-    }
-    await new Promise((resolve) => setTimeout(resolve, interval))
-  }
 }

@@ -144,6 +144,19 @@
               <el-menu-item index="/logs">日志检索</el-menu-item>
             </el-sub-menu>
 
+            <el-sub-menu index="diagnostics">
+              <template #title>
+                <el-tooltip content="诊断" placement="right" :disabled="!isCollapse">
+                  <div class="menu-item-inner">
+                    <el-icon class="menu-icon"><Document /></el-icon>
+                    <span class="menu-text">诊断</span>
+                  </div>
+                </el-tooltip>
+              </template>
+              <el-menu-item index="/tasks">任务中心</el-menu-item>
+              <el-menu-item index="/events">Events</el-menu-item>
+            </el-sub-menu>
+
             <el-sub-menu index="aiops">
               <template #title>
                 <el-tooltip content="智能运维" placement="right" :disabled="!isCollapse">

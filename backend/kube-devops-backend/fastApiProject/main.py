@@ -10,10 +10,30 @@ import time
 import uuid
 from config import settings
 
-from db.sqlite import init_db
+from db.utils.sqlite import init_db
+from services.tasks.worker import start_task_worker
 from routers import (
-    logs, prom, alerts, data, overview, tools, tools_kubectl,
-    nodes, workloads, tenants, users, auth, namespaces, monitor, ai, ops,ops_config,clusters
+    logs,
+    prom,
+    alerts,
+    data,
+    overview,
+    tools,
+    tools_kubectl,
+    nodes,
+    workloads,
+    tenants,
+    users,
+    auth,
+    namespaces,
+    monitor,
+    ai,
+    ops,
+    ops_config,
+    clusters,
+    tasks,
+    tasks_advanced,
+    events,
 )
 from services.ops.scheduler import start_healer, stop_healer
 
@@ -24,6 +44,7 @@ async def lifespan(app: FastAPI):
     init_db()
     auth.seed_admin()
     start_healer()
+    start_task_worker()
     yield
     # === shutdown ===
     stop_healer()
@@ -34,10 +55,23 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+# CORS - 直接硬编码允许的源
+cors_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+# 如果 settings 中有配置，合并它们
+if settings.CORS_ALLOW_ORIGINS and isinstance(settings.CORS_ALLOW_ORIGINS, list):
+    cors_origins = list(set(cors_origins + settings.CORS_ALLOW_ORIGINS))
+
+print(f"[CORS] Allowing origins: {cors_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ALLOW_ORIGINS,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,6 +144,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(logs.router, prefix="/api")
 app.include_router(prom.router)
 app.include_router(alerts.router)
+app.include_router(alerts.alias_router)  # compat: legacy /alerts/* paths
 app.include_router(data.router)
 app.include_router(overview.router)
 app.include_router(tools.router)
@@ -121,6 +156,9 @@ app.include_router(users.router)
 app.include_router(auth.router)
 app.include_router(namespaces.router)
 app.include_router(monitor.router)
+app.include_router(tasks.router)
+app.include_router(tasks_advanced.router)
+app.include_router(events.router)
 app.include_router(ai.router)
 app.include_router(ops.router)
 app.include_router(ops_config.router)
@@ -129,6 +167,14 @@ app.include_router(clusters.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/cors-test")
+def cors_test():
+    """用来测试 CORS 是否正常工作"""
+    return {
+        "status": "ok",
+        "message": "如果你看到这个消息且浏览器没有 CORS 错误，说明 CORS 配置正确"
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

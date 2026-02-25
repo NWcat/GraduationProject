@@ -15,8 +15,5 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 app.use(ElementPlus)
-app.use(ElLoading).use(ElAlert).use(ElEmpty)
-  .use(ElSelect).use(ElOption).use(ElCard)
-  .use(ElForm).use(ElFormItem).use(ElInput).use(ElButton);
-  
+
 app.mount('#app')

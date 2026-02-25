@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import settings
-from db.sqlite import get_conn, q
+from db.utils.sqlite import get_conn, q
 from services.ops.actions import apply_action
 from services.ops.audit import log_heal_event
 from services.ops.k8s_api import (
@@ -19,7 +19,9 @@ from services.ops.k8s_api import (
     deployment_exists,
 )
 from services.ops.schemas import ApplyActionReq
-from services.alert_client import push_alert
+from services.alerts.client import push_alert
+from db.alerts.repo import normalize_fingerprint, upsert_alert
+from services.notification.feishu_client import push_alert_async
 
 from services.ops.runtime_config import get_heal_decay_config  # ✅ 新增
 from services.ops.runtime_config import get_value as rc_get_value  # ✅ 生效值：DB override > env/settings > default
@@ -165,6 +167,51 @@ def _cooldown_key(namespace: str, key: str) -> str:
 
 def _alert_cooldown_key(kind: str, namespace: str, deployment_uid: str) -> str:
     return f"heal:alert:{kind}:{namespace}:{deployment_uid}"
+
+
+def _emit_healer_alert(
+    *,
+    namespace: str,
+    deployment_name: str,
+    deployment_uid: str,
+    reason: str,
+    severity: str,
+    alertname: str,
+    summary: str,
+) -> None:
+    labels = {
+        "alertname": alertname,
+        "severity": severity,
+        "namespace": namespace,
+        "deployment": deployment_name,
+        "deployment_uid": deployment_uid,
+        "reason": reason,
+    }
+    annotations = {
+        "summary": summary,
+        "description": f"reason={reason}",
+    }
+    fp = normalize_fingerprint(fingerprint=None, labels=labels)
+    upsert_alert(
+        fingerprint=fp,
+        status="firing",
+        labels=labels,
+        annotations=annotations,
+        starts_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        ends_at="",
+        source="healer",
+    )
+    push_alert_async(
+        {
+            "fingerprint": fp,
+            "status": "firing",
+            "labels": labels,
+            "annotations": annotations,
+            "starts_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ends_at": "",
+            "source": "healer",
+        }
+    )
 
 
 def _get_last_ts(key: str) -> Optional[int]:
@@ -430,6 +477,15 @@ def _reason_allowed(reason: str, only_reasons: Set[str]) -> bool:
 def _send_circuit_open_periodic_alert(
     namespace: str, deployment_name: str, deployment_uid: str, fail_count: int, reason: str
 ) -> Dict[str, Any]:
+    _emit_healer_alert(
+        namespace=namespace,
+        deployment_name=deployment_name,
+        deployment_uid=deployment_uid,
+        reason=reason,
+        severity="warning",
+        alertname="HealCircuitOpen",
+        summary="Heal circuit is open; auto-heal is paused",
+    )
     return push_alert(
         alertname="HealCircuitOpen",
         labels={
@@ -453,6 +509,15 @@ def _send_circuit_open_alert(
     reason: str,
     action_taken: str,
 ) -> Dict[str, Any]:
+    _emit_healer_alert(
+        namespace=namespace,
+        deployment_name=deployment_name,
+        deployment_uid=deployment_uid,
+        reason=reason,
+        severity="critical",
+        alertname="HealCircuitOpened",
+        summary="Heal circuit opened; auto-heal paused",
+    )
     return push_alert(
         alertname="HealCircuitOpened",
         labels={

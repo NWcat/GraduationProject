@@ -12,7 +12,7 @@ from services.ops.audit import list_events, delete_event_by_id, list_actions, de
 from services.ops.healer import run_heal_scan_once, get_heal_lock_info, get_heal_lock_owner_id
 from services.ops.scheduler import get_status
 from services.ops.heal_view import list_heal_deployments, get_heal_deployment_detail
-from services.alert_client import list_alerts
+from services.alerts.client import list_alerts
 from services.ops.runtime_config import get_heal_decay_config, set_heal_decay_config
 
 router = APIRouter(prefix="/api/ops", tags=["Ops"])

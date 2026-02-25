@@ -10,8 +10,10 @@ from typing import Optional, Dict, Any, Literal, Tuple
 
 from config import settings
 from services.ops.runtime_config import get_value
-from db.sqlite import get_conn, q
-from db.repo_ai import insert_feedback, upsert_evolution, delete_evolution as repo_delete_evolution
+from db.utils.sqlite import get_conn, q
+from db.ai.repo import insert_feedback, upsert_evolution, delete_evolution as repo_delete_evolution
+from db.ops.heal_state_repo import get_heal_snapshot
+from db.ops.actions_repo import get_last_ai_action
 
 from services.ai.cache import ai_cache, build_suggestion_snapshot_key
 from services.ai.forecast_cpu import get_cpu_forecast
@@ -25,7 +27,7 @@ from services.ai.schemas import SuggestionsResp, AnomalyResp
 from services.ai.rules import RuleContext, run_rules
 
 from services.ops.k8s_api import list_pods
-from services.prometheus_client import get_pod_cpu_limit_mcpu, prom_query
+from services.monitoring.prometheus_client import get_pod_cpu_limit_mcpu, prom_query
 from typing import List
 
 # ✅ 可选：拿 Deployment 当前副本数（没有也不炸）
@@ -167,6 +169,112 @@ def _sanitize_suggestions(sug: SuggestionsResp) -> SuggestionsResp:
         item.title = sanitize_text(item.title, "已生成运维建议，请结合实际情况处理。")
         item.rationale = sanitize_text(item.rationale, "系统输出中包含占位符，已替换为默认说明。")
     return sug
+
+
+def _action_type_from_kind(kind: str) -> str:
+    k = str(kind or "").lower()
+    if k in ("scale_deployment", "scale_hpa", "add_node"):
+        return "scale"
+    if k in ("tune_requests_limits",):
+        return "tune_resources"
+    if k in ("restart_deployment", "restart_pod", "delete_pod"):
+        return "ops"
+    return "alert_only"
+
+
+def _risk_from_severity(sev: str) -> str:
+    s = str(sev or "").lower()
+    if s == "critical":
+        return "high"
+    if s == "warning":
+        return "medium"
+    return "low"
+
+
+def _merge_degrade_reason(current: str, reason: str) -> str:
+    base = str(current or "").strip()
+    extra = str(reason or "").strip()
+    if not extra:
+        return base
+    if not base:
+        return extra
+    if extra in base.split("|"):
+        return base
+    return f"{base}|{extra}"
+
+
+def _anomaly_top(anom: AnomalyResp, limit: int = 5) -> list[dict]:
+    points = list(getattr(anom, "anomalies", []) or [])
+    out: list[dict] = []
+    for p in points[: max(0, int(limit))]:
+        out.append(
+            {
+                "ts": int(getattr(p, "ts", 0) or 0),
+                "value": float(getattr(p, "actual", 0.0) or 0.0),
+                "score": float(getattr(p, "score", 0.0) or 0.0),
+                "reason": str(getattr(p, "reason", "") or ""),
+            }
+        )
+    return out
+
+
+def _calc_confidence(
+    *,
+    evidence: Dict[str, Any],
+    anomalies_count: int,
+    history_points: int,
+    forecast_points: int,
+    baseline_mape: Optional[float],
+    mape: Optional[float],
+) -> tuple[float, str]:
+    if history_points < 30 or forecast_points <= 0:
+        return 0.1, "insufficient_data"
+
+    score = 0.2
+
+    peak = evidence.get("predicted_max_yhat_mcpu") or evidence.get("predicted_max_yhat") or 0.0
+    trigger = evidence.get("trigger_threshold_mcpu") or evidence.get("trigger_threshold") or 0.0
+    try:
+        if float(trigger) > 0:
+            ratio = float(peak) / float(trigger)
+            score += min(0.3, max(0.0, (ratio - 1.0) * 0.3))
+    except Exception:
+        pass
+
+    sustain_over = evidence.get("sustain_over_minutes") or 0
+    required = evidence.get("required_sustain_minutes") or evidence.get("sustain_minutes") or 0
+    try:
+        if int(required) > 0:
+            sustain_ratio = float(sustain_over) / float(required)
+            score += min(0.2, max(0.0, sustain_ratio * 0.2))
+    except Exception:
+        pass
+
+    if anomalies_count > 0:
+        score += min(0.2, float(anomalies_count) * 0.05)
+
+    if history_points >= 120:
+        score += 0.1
+
+    degrade_reason = ""
+    has_metrics = (mape is not None) or (baseline_mape is not None)
+    if not has_metrics:
+        degrade_reason = "no_metrics"
+        score *= 0.7
+    try:
+        low_fit = False
+        if baseline_mape is not None and float(baseline_mape) > 0.5:
+            low_fit = True
+        if mape is not None and float(mape) > 0.4:
+            low_fit = True
+        if low_fit:
+            score *= 0.7
+            degrade_reason = _merge_degrade_reason(degrade_reason, "low_model_fit")
+    except Exception:
+        pass
+
+    score = max(0.05, min(1.0, score))
+    return score, degrade_reason
 
 
 def _count_feedback(target: str, key: str) -> int:
@@ -582,7 +690,11 @@ def build_suggestions(
             threshold=threshold,
             sustain_minutes=sustain_minutes,
         )
-        sug = SuggestionsResp(target="node_cpu", key=node, suggestions=run_rules(ctx), meta=fc.meta or {})
+        meta = fc.meta or {}
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["baseline_mape"] = float(getattr(fc.metrics, "baseline_mape", 0.0))
+        sug = SuggestionsResp(target="node_cpu", key=node, suggestions=run_rules(ctx), meta=meta)
         anom: AnomalyResp = detect_anomalies("node_cpu", node, fc.history, fc.forecast, history_minutes, step)
 
     elif target == "node_mem":
@@ -597,7 +709,11 @@ def build_suggestions(
             threshold=threshold,
             sustain_minutes=sustain_minutes,
         )
-        sug = SuggestionsResp(target="node_mem", key=node, suggestions=run_rules(ctx), meta=fc.meta or {})
+        meta = fc.meta or {}
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["baseline_mape"] = float(getattr(fc.metrics, "baseline_mape", 0.0))
+        sug = SuggestionsResp(target="node_mem", key=node, suggestions=run_rules(ctx), meta=meta)
         anom = detect_anomalies("node_mem", node, fc.history, fc.forecast, history_minutes, step)
 
     else:  # pod_cpu
@@ -663,7 +779,11 @@ def build_suggestions(
             safe_low=safe_low,
             safe_high=safe_high,
         )
-        sug = SuggestionsResp(target="pod_cpu", key=key, suggestions=run_rules(ctx), meta=fc.meta or {})
+        meta = fc.meta or {}
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["baseline_mape"] = float(getattr(fc.metrics, "baseline_mape", 0.0))
+        sug = SuggestionsResp(target="pod_cpu", key=key, suggestions=run_rules(ctx), meta=meta)
         base_limit_source = _detect_base_limit_source(fc)
         meta = sug.meta or {}
         if isinstance(meta, dict):
@@ -675,11 +795,101 @@ def build_suggestions(
                 "base_limit_source": base_limit_source,
             }
             meta["evolution_source"] = evo_src
-            sug.meta = meta
+        sug.meta = meta
 
         anom = detect_anomalies("pod_cpu", key, fc.history, fc.forecast, history_minutes, step)
 
     sug = _sanitize_suggestions(sug)
+
+    # apply AI fields: evidence/confidence/risk/degrade_reason/action_type
+    anomalies_count = len(getattr(anom, "anomalies", []) or [])
+    anomalies_top = _anomaly_top(anom, limit=5)
+    history_points = len(getattr(fc, "history", []) or []) if "fc" in locals() else 0
+    forecast_points = len(getattr(fc, "forecast", []) or []) if "fc" in locals() else 0
+    metrics = getattr(fc, "metrics", None) if "fc" in locals() else None
+    baseline_mape = float(getattr(metrics, "baseline_mape", 0.0)) if metrics is not None else None
+    mape = float(getattr(metrics, "mape", 0.0)) if metrics is not None else None
+
+    cooldown_minutes = _cfg_int("AI_EXECUTE_COOLDOWN_MINUTES", 10)
+    daily_limit = _cfg_int("AI_EXECUTE_DAILY_LIMIT", 20)
+
+    heal_snapshot = None
+    object_key = None
+    if target == "pod_cpu":
+        meta = sug.meta or {}
+        if isinstance(meta, dict):
+            ns = str(namespace or "default")
+            duid = str(meta.get("deployment_uid") or "")
+            object_key = f"{ns}/{duid}" if duid else key
+            if duid:
+                heal_snapshot = get_heal_snapshot(namespace=ns, deployment_uid=duid)
+    else:
+        object_key = str(sug.key or "")
+
+    for item in (sug.suggestions or []):
+        evidence = item.evidence or {}
+        if isinstance(evidence, dict):
+            evidence = dict(evidence)
+            evidence.setdefault("history_points", int(history_points))
+            evidence.setdefault("forecast_points", int(forecast_points))
+            evidence.setdefault("anomalies_count", int(anomalies_count))
+            evidence.setdefault("anomalies", {"count": int(anomalies_count), "top": anomalies_top})
+            evidence.setdefault("execute_guard", {"cooldown_minutes": int(cooldown_minutes), "daily_limit": int(daily_limit)})
+            if object_key:
+                evidence.setdefault("object_key", object_key)
+            if heal_snapshot:
+                evidence.setdefault("heal", dict(heal_snapshot))
+            item.evidence = evidence
+        item.action_type = _action_type_from_kind(getattr(item.action, "kind", ""))
+        conf, degrade_reason = _calc_confidence(
+            evidence=item.evidence or {},
+            anomalies_count=anomalies_count,
+            history_points=history_points,
+            forecast_points=forecast_points,
+            baseline_mape=baseline_mape,
+            mape=mape,
+        )
+        if degrade_reason:
+            item.degrade_reason = _merge_degrade_reason(item.degrade_reason, degrade_reason)
+        if history_points < 30 or forecast_points <= 0:
+            item.action_type = "alert_only"
+            item.degrade_reason = _merge_degrade_reason(item.degrade_reason, "insufficient_data")
+            item.confidence = 0.1
+        else:
+            item.confidence = float(conf)
+
+        if heal_snapshot:
+            status = str(heal_snapshot.get("status") or "")
+            if status == "circuit_open":
+                item.confidence = max(0.05, item.confidence * 0.5)
+                item.degrade_reason = _merge_degrade_reason(item.degrade_reason, "circuit_breaker")
+                item.action_type = "alert_only"
+            elif status == "pending":
+                item.confidence = max(0.05, item.confidence * 0.7)
+                item.degrade_reason = _merge_degrade_reason(item.degrade_reason, "pending_heal")
+
+        if item.action_type not in ("scale", "tune_resources", "ops", "alert_only"):
+            item.action_type = "alert_only"
+
+        item.risk = _risk_from_severity(str(item.severity or ""))
+
+        if item.action_type and object_key:
+            last_action = get_last_ai_action(object_key=object_key, action_type=item.action_type)
+            if last_action:
+                exec_info = {
+                    "ts": int(last_action.get("ts") or 0),
+                    "result": str(last_action.get("result") or ""),
+                    "detail": str(last_action.get("detail") or ""),
+                    "action": str(last_action.get("action") or ""),
+                    "dry_run": bool(last_action.get("dry_run") or 0),
+                }
+                evidence = item.evidence or {}
+                if isinstance(evidence, dict):
+                    evidence["execute"] = exec_info
+                    evidence["last_execute_failed"] = exec_info.get("result") == "failed"
+                    if exec_info.get("result") == "failed":
+                        evidence["fail_reason"] = exec_info.get("detail") or ""
+                item.evidence = evidence
 
     llm_summary: Optional[str] = None
     if use_llm:

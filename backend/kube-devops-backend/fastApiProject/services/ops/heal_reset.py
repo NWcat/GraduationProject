@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from db.sqlite import get_conn, q
+from db.utils.sqlite import get_conn, q
 from services.ops.k8s_api import scale_deployment
 
 

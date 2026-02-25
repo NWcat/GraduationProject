@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.users_service import reset_password, toggle_user
+from services.users.service import reset_password, toggle_user
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 

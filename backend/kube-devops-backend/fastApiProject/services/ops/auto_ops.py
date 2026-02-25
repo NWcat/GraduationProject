@@ -5,11 +5,11 @@ from typing import Dict, Any, Optional
 import time
 
 from config import settings
-from db.sqlite import get_conn, q
+from db.utils.sqlite import get_conn, q
 from services.ai.suggest import build_suggestions
 from services.ops.actions import apply_action
 from services.ops.schemas import ApplyActionReq
-from services.alert_client import push_alert
+from services.alerts.client import push_alert
 
 from services.ops.runtime_config import get_value  # ✅ DB override > env/settings > default
 

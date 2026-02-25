@@ -22,6 +22,7 @@ class ErrorMetrics(BaseModel):
     mae: float = 0.0
     rmse: float = 0.0
     mape: float = 0.0
+    baseline_mape: float = 0.0
     note: str = ""
 
 
@@ -130,6 +131,10 @@ class SuggestionItem(BaseModel):
     severity: Literal["info", "warning", "critical"]
     title: str
     evidence: Dict[str, Any] = {}
+    confidence: float = 0.1
+    risk: str = "low"
+    degrade_reason: str = ""
+    action_type: str = "alert_only"
     rationale: str
     action: ActionHint
 

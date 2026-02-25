@@ -14,7 +14,14 @@ from services.ai.forecast_core import (
     build_forecast_series,
 )
 from services.ops.runtime_config import get_value  # ✅DB override > settings/.env > default
-from services.prometheus_client import instant_vector
+from services.monitoring.prometheus_client import instant_vector
+
+def _baseline_points(history: list[tuple[int, float]], forecast: list[BandPoint]) -> list[TsPoint]:
+    if not forecast:
+        return []
+    last_val = history[-1][1] if history else 0.0
+    val = max(0.0, float(last_val))
+    return [TsPoint(ts=p.ts, value=val) for p in forecast]
 
 
 POD_CPU_CONFIG = ForecastConfig(
@@ -177,6 +184,7 @@ def get_pod_cpu_forecast(
             ),
             "prom_base": _prom_base(),
             "limit_mcpu": limit_mcpu,
+            "baseline_points": _baseline_points(history, forecast_series),
         },
     )
     ai_cache.set(cache_key, resp, ttl=cache_ttl)

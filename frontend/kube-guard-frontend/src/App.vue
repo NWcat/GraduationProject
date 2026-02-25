@@ -1,4 +1,6 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { RouterLink, RouterView } from 'vue-router';
+</script>
 
 <template>
   <div>
@@ -11,8 +13,14 @@
   </div>
 </template>
 
-<script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router';
-</script>
+<style scoped>
+:global(html, body, #app) {
+  height: 100%;
+  margin: 0;
+}
 
-<style scoped></style>
+/* Global scroll strategy: body locked, el-main is the only scroll container. */
+:global(body) {
+  overflow: hidden;
+}
+</style>

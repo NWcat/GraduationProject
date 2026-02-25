@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from services.workloads_service import (
+from services.workloads.service import (
     list_namespaces,
     list_deployments,
     list_statefulsets,
@@ -22,7 +22,7 @@ from services.workloads_service import (
 
 # ✅ 新建/应用 YAML：kubectl apply -f -
 # 如果你还没加这个文件：services/kubectl_runner.py，按我上次给你的创建
-from services.kubectl_runner import kubectl_apply_yaml
+from services.k8s.kubectl_runner import kubectl_apply_yaml
 
 
 Kind = Literal["deployment", "statefulset", "pod"]

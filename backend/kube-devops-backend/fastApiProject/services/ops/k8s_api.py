@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from services.kubectl_runner import run_kubectl
-from services.kube_client import get_core_v1, get_apps_v1
+from services.k8s.kubectl_runner import run_kubectl
+from services.k8s.kube_client import get_core_v1, get_apps_v1
 
 
 def _safe_k8s_client_enabled() -> bool:

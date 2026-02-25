@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from kubernetes.client.rest import ApiException
 
 from services.inspect.models import InspectItem
-from services.kube_client import get_core_v1, get_apps_v1
+from services.k8s.kube_client import get_core_v1, get_apps_v1
 
 # Prometheus 可选
 try:
-    from services.prometheus_client import instant_value  # type: ignore
+    from services.monitoring.prometheus_client import instant_value  # type: ignore
 except Exception:
     instant_value = None  # type: ignore
 

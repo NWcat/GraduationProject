@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from services.nodes_service import list_nodes
-from services.nodes_ops import remove_node, offline_node, uncordon_node
+from services.nodes.service import list_nodes
+from services.nodes.ops import remove_node, offline_node, uncordon_node
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from typing import Any, Dict, Optional
 
-from services.loki_client import query_logs_range
-from services.alert_client import list_alerts
-from services.prometheus_client import range_by_minutes
-from services.promql_guard import validate_promql
+from services.monitoring.loki_client import query_logs_range
+from services.alerts.client import list_alerts
+from services.monitoring.prometheus_client import range_by_minutes
+from services.monitoring.promql_guard import validate_promql
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 

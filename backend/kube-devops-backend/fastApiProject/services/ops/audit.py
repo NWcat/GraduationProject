@@ -5,7 +5,7 @@ import json
 import time
 from typing import Any, Dict, List
 
-from db.sqlite import get_conn, q, write_with_retry
+from db.utils.sqlite import get_conn, q, write_with_retry
 
 MAX_FAILURE_COUNT = 3  # 保留也行（仅用于展示/外部代码需要），但 log_heal_event 不再用它推进状态
 

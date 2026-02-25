@@ -19,6 +19,16 @@ from services.ai.forecast_core import (
 )
 
 
+def _baseline_points(history: list[tuple[int, float]], forecast: list[BandPoint]) -> list[TsPoint]:
+    if not forecast:
+        return []
+    last_val = history[-1][1] if history else 0.0
+    val = max(0.0, float(last_val))
+    if val > 100.0:
+        val = 100.0
+    return [TsPoint(ts=p.ts, value=val) for p in forecast]
+
+
 CPU_CONFIG = ForecastConfig(
     min_points_absolute=90,
     min_points_ratio=0.5,
@@ -148,6 +158,7 @@ def get_cpu_forecast(
             ),
             "prom_base": _prom_base(),
             "resolved_instance": resolved_instance,
+            "baseline_points": _baseline_points(history, forecast_series),
         },
     )
     ai_cache.set(cache_key, resp, ttl=cache_ttl)

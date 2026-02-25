@@ -18,6 +18,12 @@ class ApplyActionResp(BaseModel):
     dry_run: bool
     detail: str = ""
     data: Dict[str, Any] = {}
+    forbid: bool = False
+    forbid_reason: str = ""
+    cooldown_remaining: int = 0
+    limit_remaining: int = 0
+    planned_action: Optional[Dict[str, Any]] = None
+    evidence_snapshot: Optional[Dict[str, Any]] = None
 
 
 class HealResetReq(BaseModel):

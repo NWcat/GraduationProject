@@ -14,7 +14,7 @@ import pandas as pd
 
 from services.ai.metrics import mae, rmse, mape
 from services.ai.schemas import BandPoint, ErrorMetrics
-from services.prometheus_client import instant_vector, prom_query_range
+from services.monitoring.prometheus_client import instant_vector, prom_query_range
 
 
 @dataclass(frozen=True)
@@ -370,11 +370,14 @@ def fit_predict_prophet(
     valid_pred = model_bt.predict(future_valid)
     y_true = [v for _, v in valid]
     y_pred = [max(0.0, float(v)) for v in valid_pred["yhat"].tolist()]
+    baseline_last = train[-1][1] if train else 0.0
+    baseline_pred = [max(0.0, float(baseline_last)) for _ in y_true]
 
     metrics = ErrorMetrics(
         mae=float(mae(y_true, y_pred)),
         rmse=float(rmse(y_true, y_pred)),
         mape=float(mape(y_true, y_pred)),
+        baseline_mape=float(mape(y_true, baseline_pred)),
         note=f"prophet|points={points_len}|min_required={dynamic_min}|train={train_len}|valid={valid_len}",
     )
     return forecast, metrics

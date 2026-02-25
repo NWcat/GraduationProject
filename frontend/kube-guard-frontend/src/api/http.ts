@@ -18,6 +18,7 @@ function genRequestId(): string {
 export const http: AxiosInstance = axios.create({
   baseURL,
   timeout: 15000,
+  withCredentials: true,
 })
 
 http.interceptors.request.use((config) => {
